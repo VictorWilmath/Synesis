@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bodytracker"
+version = "0.1.0"
+description = "HMD-anchored single-webcam full-body tracking for VRChat"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# Kept deliberately tiny so that the coordinate math, filters and the OSC
+# sender can be installed and tested anywhere, including on a machine with no
+# GPU and no camera. Everything heavy lives in an extra.
+dependencies = [
+    "numpy>=1.24",
+    "python-osc>=1.8",
+]
+
+[project.optional-dependencies]
+# The tracker itself. Install this on the VR rig.
+runtime = [
+    "opencv-python>=4.9",
+    "scipy>=1.11",
+    "onnxruntime>=1.17",
+    "rtmlib>=0.0.13",
+    "openvr>=1.26",
+]
+# Swap onnxruntime for the CUDA build. Install alongside `runtime`.
+gpu = [
+    "onnxruntime-gpu>=1.17",
+]
+# Only needed on the training box. The VR rig never needs torch.
+training = [
+    "torch>=2.2",
+    "tqdm>=4.66",
+    "tensorboard>=2.16",
+    "smplx>=0.1.28",
+    "pyyaml>=6.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.3",
+]
+
+[project.scripts]
+bodytracker = "bodytracker.app.__main__:main"
+bodytracker-osc-smoke = "bodytracker.tools.osc_smoke:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `training` is intentionally not an installed package: it only ever runs from
+# a checkout on the machine with the GPU, and putting it on the path here lets
+# it be tested without dragging torch into the tracker's dependencies.
+pythonpath = ["src", "."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]

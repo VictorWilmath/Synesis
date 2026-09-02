@@ -1,0 +1,118 @@
+# Default configuration. Copy to `configs/local.toml` and edit; the runtime
+# loads `default.toml` first and overlays the local file if present.
+
+[camera]
+index = 0
+width = 1280
+height = 720
+fps = 30
+# Webcams default to autoexposure, which hunts under artificial light and
+# produces the motion blur that actually degrades keypoint quality. Lock it.
+lock_exposure = true
+exposure = -6          # OpenCV/DirectShow log2 scale; -6 is roughly 1/64 s
+gain = 0
+autofocus = false
+# MJPG lets most webcams hit 30fps at 720p; YUYV usually caps at 10fps.
+fourcc = "MJPG"
+mirror = false
+
+[camera.intrinsics]
+# Left empty until `bodytracker calibrate-intrinsics` runs. Until then the
+# runtime falls back to a pinhole guess from `fallback_fov_deg`.
+fallback_fov_deg = 62.0
+path = "calibration/intrinsics.json"
+
+[pose2d]
+# 'lightweight' | 'balanced' | 'performance'
+mode = "balanced"
+backend = "onnxruntime"
+device = "cuda"
+# One static camera and one person, so the detector is nearly pure overhead.
+# Re-run it every N frames or when tracking confidence collapses.
+detect_interval = 30
+bbox_padding = 0.25
+min_keypoint_score = 0.35
+# Fraction of body keypoints that must clear min_keypoint_score for the frame
+# to count as a successful track.
+min_valid_ratio = 0.5
+
+[vr]
+enabled = true
+# Poll rate for SteamVR device poses. The compositor runs at display rate;
+# we only need enough to interpolate onto camera frames.
+poll_hz = 90
+
+[calibration]
+path = "calibration/extrinsics.json"
+# Minimum accumulated correspondences before an extrinsics solve is attempted.
+min_samples = 120
+# Discard samples where the subject barely moved; they add no information.
+min_sample_spacing_m = 0.05
+ransac_reproj_threshold_px = 8.0
+# Keep refining online once solved, so knocking the camera does not end the
+# session. A new solve is only adopted if it fits better than the current one.
+online_refine = true
+refine_interval_s = 5.0
+# Head samples must span at least this much for a solve to be conditioned.
+# Correspondences from someone standing still are all the same correspondence.
+min_coverage_m = 0.35
+
+[body]
+# Filled in by `bodytracker calibrate-body`. Height is used to scale the
+# generic bone-length prior until a per-user solve replaces it.
+height_m = 1.75
+path = "calibration/body.json"
+
+[lift]
+# 'anchored' pins the head depth to the headset, which is what makes the output
+# metric rather than merely plausible. It degrades to 'geometric', the Phase 1
+# baseline, whenever the headset or the camera calibration is unavailable.
+# 'neural' uses the trained lifter.
+method = "anchored"
+model_path = "models/lifter.onnx"
+window = 27
+# If the solved head lands further than this from where the headset says it is,
+# the pose model is probably tracking someone else, so stop anchoring to it.
+max_head_residual_m = 0.35
+
+[filter]
+# One Euro. min_cutoff sets the smoothing when you are still, beta how fast the
+# filter opens up once you move. Measured on a synthetic 0.6 m/s walk with 2.5 px
+# of keypoint noise, which is about what a 720p webcam gives:
+#
+#   min_cutoff  beta   lag    jitter at rest
+#   1.0         0.35   8.1cm  8.6mm
+#   1.0         2.0    4.8cm  12mm      <- default
+#   1.0         8.0    2.2cm  19mm
+#
+# Unfiltered jitter is 47 mm, so even the snappy end is doing real work. The
+# default leans toward low lag, because feet dragging behind you reads as broken
+# in VR in a way that a little shimmer does not. Raise beta if it still drags.
+min_cutoff = 1.0
+beta = 2.0
+d_cutoff = 1.0
+# Rotations get SLERP smoothing instead, expressed as a per-second rate.
+rotation_alpha = 0.35
+# How long to keep sending the last good value for a joint that dropped out
+# before marking it invalid.
+hold_last_valid_s = 0.5
+
+[solve]
+enforce_bone_lengths = true
+floor_clamp = true
+# Feet below this height are snapped to the floor plane.
+floor_epsilon_m = 0.03
+
+[osc]
+host = "127.0.0.1"
+port = 9000
+# VRChat's IK compensates better with fewer trackers, so default to the
+# minimal useful set. Valid roles: hip, chest, left_foot, right_foot,
+# left_knee, right_knee, left_elbow, right_elbow.
+roles = ["hip", "left_foot", "right_foot"]
+send_head = false
+send_rate_hz = 60
+
+[debug]
+overlay = true
+print_stats_interval_s = 2.0
