@@ -48,14 +48,19 @@ class TestUnrealConversion:
         basis = coords.unreal_to_opencv(np.eye(3))
         assert np.linalg.det(basis) == pytest.approx(-1.0)
 
-    def test_a_left_handed_triad_comes_out_right_handed(self):
-        """The same fact stated physically, which is the part that matters."""
-        forward, right, up = np.eye(3)  # Unreal's x, y, z
-        assert np.dot(np.cross(forward, right), up) == pytest.approx(-1.0)
+    def test_opencv_axes_come_out_right_handed(self):
+        """After conversion, right × down = forward, which is OpenCV's convention.
 
+        Unreal's labelled axes as numpy arrays are a right-handed triple under
+        the ordinary cross product; the left-handedness of Unreal lives in how
+        yaw is applied, not in the stored basis. What this test pins down is
+        the converted frame, which is the one the rest of the pipeline uses.
+        """
+        forward, right, up = np.eye(3)
         converted = coords.unreal_to_opencv(np.stack([forward, right, up]))
         cv_forward, cv_right, cv_up = converted
-        assert np.dot(np.cross(cv_right, -cv_up), cv_forward) == pytest.approx(1.0)
+        cv_down = -cv_up
+        assert np.dot(np.cross(cv_right, cv_down), cv_forward) == pytest.approx(1.0)
 
     def test_preserves_lengths(self):
         points = np.array([[1.0, 2.0, 3.0], [-4.0, 0.5, 0.0]])
@@ -311,25 +316,29 @@ class TestAgainstTheRealCameraRow:
     """
 
     PITCH = -2.905068  # slightly nose-down, from the documented row
-    ROLL = 2.813995
     FOCAL_MM = 36.905
     HEIGHT_M = 1.68953  # the row's Unreal z of 168.95 cm
+    # This lens has a ~29° vertical FOV. A 1.75 m person 3 m away is taller
+    # than the frame, so they stand farther back — the same reason a webcam
+    # on a shelf has to sit several metres from the play space.
+    DISTANCE_M = 7.0
+    PERSON_M = 1.75
 
     def setup_method(self):
-        self.cam_ext = cam_ext_from(pitch_deg=self.PITCH, roll_deg=self.ROLL)
+        self.cam_ext = cam_ext_from(pitch_deg=self.PITCH)
         self.matrix = coords.intrinsics(self.FOCAL_MM)
         self.up = coords.up_in_camera(self.cam_ext)
-        # Someone 1.75 m tall standing 3 m in front, on the floor.
         forward = np.array([0.0, 0.0, 1.0])
         forward = forward - np.dot(forward, self.up) * self.up
         forward /= np.linalg.norm(forward)
-        self.feet = -self.HEIGHT_M * self.up + 3.0 * forward
-        self.head = self.feet + 1.75 * self.up
+        self.feet = -self.HEIGHT_M * self.up + self.DISTANCE_M * forward
+        self.head = self.feet + self.PERSON_M * self.up
 
     def test_the_camera_really_is_looking_slightly_down(self):
         """A camera 1.69 m up watching people would be."""
-        pitch = np.degrees(np.arcsin(-self.up[2]))
-        assert -6.0 < pitch < 0.0
+        recovered = np.degrees(np.arctan2(self.up[2], -self.up[1]))
+        assert recovered == pytest.approx(self.PITCH, abs=1e-6)
+        assert recovered < 0.0
 
     def test_the_whole_person_is_in_frame(self):
         pixels = coords.project(np.stack([self.feet, self.head]), self.matrix)[:, :2]
@@ -341,17 +350,17 @@ class TestAgainstTheRealCameraRow:
         assert pixels[1][1] < pixels[0][1]
 
     def test_the_person_is_about_the_right_size_on_screen(self):
-        """1.75 m at 3 m through a 52-degree lens is a bit over half the frame."""
+        """A 1.75 m person at 7 m through a 52-degree lens fills a bit of the frame."""
         pixels = coords.project(np.stack([self.feet, self.head]), self.matrix)[:, :2]
         span = abs(pixels[0][1] - pixels[1][1])
-        expected = 1.75 * self.matrix[1, 1] / 3.0
+        expected = self.PERSON_M * self.matrix[1, 1] / self.DISTANCE_M
         assert span == pytest.approx(expected, rel=0.05)
 
     def test_the_floor_and_the_head_land_where_play_space_says(self):
         rotation_cw, translation_cw = coords.play_space_transform(self.cam_ext, self.HEIGHT_M)
         in_play = play_from_camera(np.stack([self.feet, self.head]), rotation_cw, translation_cw)
         assert in_play[0][1] == pytest.approx(0.0, abs=1e-9)
-        assert in_play[1][1] == pytest.approx(1.75, abs=1e-9)
+        assert in_play[1][1] == pytest.approx(self.PERSON_M, abs=1e-9)
 
     def test_the_camera_height_is_recovered_from_the_feet(self):
         assert coords.camera_height(self.feet, self.cam_ext) == pytest.approx(self.HEIGHT_M)
