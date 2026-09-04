@@ -31,6 +31,10 @@ def _default_lifter(config: Config):
     """
     if config.lift.method == "geometric":
         return GeometricLifter(min_score=config.pose2d.min_keypoint_score)
+    if config.lift.method == "neural":
+        from ..lift.neural import NeuralLifter
+
+        return NeuralLifter(config.lift.model_path, window=config.lift.window)
     return AnchoredLifter(min_score=config.pose2d.min_keypoint_score)
 
 

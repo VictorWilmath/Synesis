@@ -21,6 +21,7 @@ __all__ = [
     "GeometricLifter",
     "LiftContext",
     "Lifter",
+    "NeuralLifter",
     "anchor_points_play",
     "backproject_rays",
     "bone_length_lookup",

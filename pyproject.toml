@@ -36,6 +36,7 @@ training = [
     "torch>=2.2",
     "tqdm>=4.66",
     "tensorboard>=2.16",
+    "onnx>=1.16",
     "smplx>=0.1.28",
     "pyyaml>=6.0",
 ]

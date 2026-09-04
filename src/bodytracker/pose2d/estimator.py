@@ -15,6 +15,7 @@ import time
 import numpy as np
 
 from ..config import Pose2DConfig
+from ..onnx import configure_cuda_dlls
 from ..skeleton import NUM_KEYPOINTS
 from ..types import Keypoints2D
 from .models import get_preset
@@ -38,6 +39,7 @@ class Pose2DEstimator:
 
         # Imported lazily so the module can be imported for its type
         # signatures on a machine with no onnxruntime.
+        configure_cuda_dlls()
         from rtmlib import YOLOX, RTMPose
 
         log.info("loading %s on %s (%s)", config.mode, config.device, preset.description)
