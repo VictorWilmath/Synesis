@@ -102,7 +102,11 @@ def _lifter_factory(name: str, config):
         return lambda: AnchoredLifter(
             min_score=min_score, max_head_residual_m=config.lift.max_head_residual_m
         )
-    raise SystemExit(f"unknown lifter '{name}' (expected 'geometric' or 'anchored')")
+    if name == "neural":
+        from ..lift.neural import NeuralLifter
+
+        return lambda: NeuralLifter(config.lift.model_path, window=config.lift.window)
+    raise SystemExit(f"unknown lifter '{name}' (expected 'geometric', 'anchored', or 'neural')")
 
 
 def main(argv: list[str] | None = None) -> int:

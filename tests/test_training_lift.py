@@ -48,6 +48,23 @@ def test_features_and_model_shapes():
     assert torch.isfinite(output).all()
 
 
+def test_low_confidence_keypoints_do_not_contribute_unbounded_rays():
+    batch = _batch()
+    batch.xy[:, :, 0] = 1e12
+    batch.scores[:, :, 0] = 0.05
+    encoded, _ = features(batch)
+    assert torch.isfinite(encoded).all()
+    assert torch.all(encoded[:, :, :2] == 0)
+
+
+def test_visible_keypoints_are_clamped_to_a_plausible_camera_ray():
+    batch = _batch()
+    batch.xy[:, :, 0] = 1e12
+    batch.scores[:, :, 0] = 0.9
+    encoded, _ = features(batch)
+    assert torch.all(encoded[:, :, :2] == 3.0)
+
+
 def test_loss_prefers_target():
     batch = _batch()
     target = centre_target(batch)

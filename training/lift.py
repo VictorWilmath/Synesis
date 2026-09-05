@@ -101,6 +101,15 @@ def features(batch: Batch) -> tuple[Tensor, Tensor]:
     focal = intrinsics[..., (0, 1), (0, 1)].unsqueeze(-2)
     principal = intrinsics[..., :2, 2].unsqueeze(-2)
     rays = (batch.xy - principal) / focal.clamp_min(1e-6)
+    # A projected point behind or far outside a camera can have a perfectly
+    # finite but astronomical pixel coordinate. Its confidence marks it as
+    # unavailable; feeding it into a GRU anyway can overflow activations.
+    rays = torch.where(batch.scores.unsqueeze(-1) > 0.2, rays, torch.zeros_like(rays))
+    # Detector keypoints can still be low-confidence rather than absent. Keep
+    # those observations, but cap normalized rays to a physically useful
+    # webcam field; values beyond this are neither observable nor stable in
+    # CUDA mixed precision.
+    rays = rays.clamp(-3.0, 3.0)
     origin = _origin(batch)
     devices = torch.nan_to_num(batch.device_pos - origin[:, None, None, :])
     rotations = torch.nan_to_num(batch.device_rot).flatten(start_dim=2)

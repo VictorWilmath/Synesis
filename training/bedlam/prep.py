@@ -1,4 +1,4 @@
-"""Build training shards from a synthetic scene or a BEDLAM processed npz.
+"""Build training shards from synthetic, processed, or raw BEDLAM motion data.
 
 The synthetic path exists so the rest of the training stack can be written
 and tested before anyone downloads a terabyte. It uses the same scene fixture
@@ -7,6 +7,7 @@ overfit something we understand.
 
     python -m training.bedlam.prep --synthetic --out data/shards
     python -m training.bedlam.prep --npz path/to/scene.npz --out data/shards
+    python -m training.bedlam.prep --motion E:/bedlam --smplx-models E:/smplx --out data/shards
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from .samples import (
     save_shard,
     windows,
 )
+from .smplx import joints_from_motion
+from .virtual_camera import virtual_camera_sequence
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +36,19 @@ def build_parser() -> argparse.ArgumentParser:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--synthetic", action="store_true", help="build shards from the eval scene")
     source.add_argument("--npz", help="path to a BEDLAM processed npz (or a directory of them)")
+    source.add_argument(
+        "--motion", help="raw BEDLAM motion_seq.npz, or a directory containing them"
+    )
+    parser.add_argument(
+        "--smplx-models", help="extracted SMPL-X package root; required with --motion"
+    )
+    parser.add_argument(
+        "--device", default="cuda", help="torch device for raw SMPL-X reconstruction"
+    )
+    parser.add_argument("--limit", type=int, help="maximum raw motion clips to process")
+    parser.add_argument(
+        "--skip", type=int, default=0, help="raw motion clips to skip before applying --limit"
+    )
     parser.add_argument("--out", default="data/shards", help="directory to write shards into")
     parser.add_argument("--window", type=float, default=0.9, help="window length in seconds")
     parser.add_argument("--stride", type=float, default=0.45, help="window stride in seconds")
@@ -48,6 +64,12 @@ def _iter_npz(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
     return sorted(path.glob("*.npz"))
+
+
+def _iter_motion(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path]
+    return sorted(path.rglob("motion_seq.npz"))
 
 
 def _flush(out_dir: Path, batch: list, shard_index: int, notes: str) -> int:
@@ -82,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
         )
         sequences = [from_scene(scene, source=f"synthetic-seed{args.seed}")]
-    else:
+    elif args.npz:
         paths = _iter_npz(Path(args.npz))
         if not paths:
             log.error("no npz files in %s", args.npz)
@@ -92,6 +114,33 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 sequences.append(load_bedlam_npz(path))
             except (KeyError, ValueError) as exc:
+                log.error("%s: %s", path, exc)
+                return 1
+    else:
+        if not args.smplx_models:
+            log.error("--smplx-models is required with --motion")
+            return 1
+        paths = _iter_motion(Path(args.motion))
+        if args.skip < 0:
+            log.error("--skip must not be negative")
+            return 1
+        paths = paths[args.skip :]
+        if args.limit is not None:
+            paths = paths[: max(args.limit, 0)]
+        if not paths:
+            log.error("no motion_seq.npz files in %s", args.motion)
+            return 1
+        sequences = []
+        model_cache: dict[str, object] = {}
+        for index, path in enumerate(paths):
+            try:
+                joints = joints_from_motion(
+                    path, args.smplx_models, device=args.device, model_cache=model_cache
+                )
+                sequences.append(
+                    virtual_camera_sequence(joints, seed=args.seed + index, source=str(path))
+                )
+            except (FileNotFoundError, KeyError, ValueError, RuntimeError) as exc:
                 log.error("%s: %s", path, exc)
                 return 1
 

@@ -237,6 +237,34 @@ class TestBedlamNpz:
 
 
 class TestPrepCli:
+    def test_raw_motion_rejects_a_negative_skip(self, tmp_path):
+        from training.bedlam.prep import main
+
+        motion = tmp_path / "motion_seq.npz"
+        np.savez(motion, ignored=np.zeros(1))
+        assert (
+            main(
+                [
+                    "--motion",
+                    str(motion),
+                    "--smplx-models",
+                    str(tmp_path),
+                    "--skip",
+                    "-1",
+                    "--out",
+                    str(tmp_path / "shards"),
+                ]
+            )
+            == 1
+        )
+
+    def test_raw_motion_requires_model_files(self, tmp_path):
+        from training.bedlam.prep import main
+
+        motion = tmp_path / "motion_seq.npz"
+        np.savez(motion, ignored=np.zeros(1))
+        assert main(["--motion", str(motion), "--out", str(tmp_path / "shards")]) == 1
+
     def test_synthetic_writes_a_shard(self, tmp_path):
         from training.bedlam.prep import main
 

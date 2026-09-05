@@ -23,7 +23,9 @@ from .samples import (
     save_shard,
     windows,
 )
+from .smplx import joints_from_motion, split_pose
 from .subset import Criteria, Scored, read_scene_list, report, scan_download, score, select
+from .virtual_camera import virtual_camera_sequence
 
 __all__ = [
     "Criteria",
@@ -39,6 +41,7 @@ __all__ = [
     "from_skeleton",
     "from_smplx_body",
     "load_shard",
+    "joints_from_motion",
     "parse",
     "read_scene_list",
     "report",
@@ -47,7 +50,9 @@ __all__ = [
     "scan_download",
     "score",
     "select",
+    "split_pose",
     "to_halpe",
     "try_parse",
+    "virtual_camera_sequence",
     "windows",
 ]
