@@ -44,9 +44,9 @@ poll_hz = 90
 
 [calibration]
 path = "calibration/extrinsics.json"
-# Five fresh pose/VR correspondences per second is ample for a room solve and
-# leaves GPU time for SteamVR.
-sample_rate_hz = 5.0
+# Two fresh pose/VR correspondences per second is ample for a room solve and
+# keeps the calibration deliberately light while SteamVR owns the GPU.
+sample_rate_hz = 2.0
 # Minimum accumulated correspondences before an extrinsics solve is attempted.
 min_samples = 120
 # Discard samples where the subject barely moved; they add no information.

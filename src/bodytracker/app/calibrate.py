@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -66,7 +67,9 @@ def calibrate_extrinsics_session(config: Config) -> int:
         return 1
 
     camera = Webcam(config.camera)
-    estimator = Pose2DEstimator(config.pose2d)
+    # SteamVR needs uninterrupted access to the GPU. Calibration tolerates a
+    # lower 2D-pose rate, so always use the smallest model on CPU here.
+    estimator = Pose2DEstimator(replace(config.pose2d, mode="lightweight", device="cpu"))
     sample_interval_s = 1.0 / config.calibration.sample_rate_hz
     buffer = CorrespondenceBuffer(
         min_spacing_m=config.calibration.min_sample_spacing_m,
@@ -78,7 +81,7 @@ def calibrate_extrinsics_session(config: Config) -> int:
         "  Stay in frame and move around: step side to side, forward and back,\n"
         "  crouch, and hold your controllers where the camera can see them.\n"
         "  Cover as much of your play space as you can.\n\n"
-        "  [enter] solve and save    [c] clear samples    [q] abort\n"
+        "  [enter] solve and save (or exit if not ready)    [c] clear samples    [q] abort\n"
     )
 
     camera.open()
@@ -120,7 +123,8 @@ def calibrate_extrinsics_session(config: Config) -> int:
                 continue
             if key in (13, 10):  # enter
                 if not _ready(buffer, config):
-                    continue
+                    print("Not enough data yet; closing without saving.")
+                    return 1
                 break
     finally:
         camera.close()
