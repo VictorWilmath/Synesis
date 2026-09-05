@@ -67,6 +67,7 @@ def calibrate_extrinsics_session(config: Config) -> int:
 
     camera = Webcam(config.camera)
     estimator = Pose2DEstimator(config.pose2d)
+    sample_interval_s = 1.0 / config.calibration.sample_rate_hz
     buffer = CorrespondenceBuffer(
         min_spacing_m=config.calibration.min_sample_spacing_m,
         min_score=max(0.5, config.pose2d.min_keypoint_score),
@@ -82,6 +83,8 @@ def calibrate_extrinsics_session(config: Config) -> int:
 
     camera.open()
     started = time.monotonic()
+    last_sample_at = float("-inf")
+    latest_keypoints = None
     try:
         while True:
             frame_data = camera.read()
@@ -89,14 +92,19 @@ def calibrate_extrinsics_session(config: Config) -> int:
                 continue
             timestamp, frame = frame_data
 
-            keypoints = estimator(frame, timestamp=timestamp)
-            state = vr.poll()
-            if keypoints is not None and state is not None:
-                buffer.add(state, keypoints)
+            # A calibration needs varied correspondences, not 30 expensive GPU
+            # inferences per second. Throttle only this screen; the normal live
+            # tracker remains free to use its full rate.
+            if time.monotonic() - last_sample_at >= sample_interval_s:
+                latest_keypoints = estimator(frame, timestamp=timestamp)
+                state = vr.poll()
+                last_sample_at = time.monotonic()
+                if latest_keypoints is not None and state is not None:
+                    buffer.add(state, latest_keypoints)
 
             canvas = overlay.render(
                 frame,
-                _preview_result(timestamp, keypoints),
+                _preview_result(timestamp, latest_keypoints),
                 intrinsics=intrinsics.matrix,
                 min_score=config.pose2d.min_keypoint_score,
                 extra_lines=_calibration_lines(buffer, config, started),
@@ -181,6 +189,7 @@ def _calibration_lines(buffer: CorrespondenceBuffer, config: Config, started: fl
         "ready - press enter to solve"
         if _meets_requirements(buffer, config)
         else "keep moving around your play space",
+        f"sampling at {config.calibration.sample_rate_hz:.0f} Hz",
         f"{time.monotonic() - started:.0f}s",
     ]
     return lines
@@ -190,8 +199,10 @@ def calibrate_intrinsics_session(config: Config) -> int:
     """Classic checkerboard intrinsics calibration."""
     board = (9, 6)
     square_m = 0.025
+    capture_interval_s = 5.0
     camera = Webcam(config.camera)
     frames: list[np.ndarray] = []
+    last_capture_at = float("-inf")
 
     print(
         f"\nCamera intrinsics calibration\n"
@@ -199,7 +210,8 @@ def calibrate_intrinsics_session(config: Config) -> int:
         f"({square_m * 1000:.0f} mm squares) and hold it up to the camera.\n"
         "  Capture 15-25 views: near and far, centred and in the corners,\n"
         "  and tilted. Corner and tilted views are what pin down distortion.\n\n"
-        "  [space] capture    [enter] solve and save    [q] abort\n"
+        f"  A valid view is captured automatically every {capture_interval_s:.0f} seconds.\n"
+        "  Move the board between captures. [enter] solve and save    [q] abort\n"
     )
 
     camera.open()
@@ -218,12 +230,25 @@ def calibrate_intrinsics_session(config: Config) -> int:
             )
             if found:
                 cv2.drawChessboardCorners(canvas, board, corners, found)
+                now = time.monotonic()
+                if now - last_capture_at >= capture_interval_s:
+                    frames.append(frame.copy())
+                    last_capture_at = now
+                    print(f"captured {len(frames)}")
+            else:
+                now = time.monotonic()
+            seconds_until_capture = max(0.0, capture_interval_s - (now - last_capture_at))
             overlay.draw_stats(
                 canvas,
                 [
                     f"captured {len(frames)}",
                     "board visible" if found else "no board detected",
-                    "[space] capture  [enter] solve  [q] abort",
+                    (
+                        f"next automatic capture in {seconds_until_capture:.1f}s"
+                        if found
+                        else "show the whole checkerboard to the camera"
+                    ),
+                    "[enter] solve  [q] abort",
                 ],
             )
             cv2.imshow("calibrate-intrinsics", canvas)
@@ -231,9 +256,6 @@ def calibrate_intrinsics_session(config: Config) -> int:
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 return 1
-            if key == ord(" ") and found:
-                frames.append(frame.copy())
-                print(f"captured {len(frames)}")
             if key in (13, 10):
                 if len(frames) < 8:
                     print(f"only {len(frames)} views, need at least 8")

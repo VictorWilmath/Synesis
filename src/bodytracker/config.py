@@ -57,6 +57,9 @@ class VRConfig:
 @dataclass(slots=True)
 class CalibrationConfig:
     path: str = "calibration/extrinsics.json"
+    # Extrinsics needs varied, accurate samples rather than every video frame.
+    # Limiting pose inference prevents it from starving SteamVR's compositor.
+    sample_rate_hz: float = 5.0
     min_samples: int = 120
     min_sample_spacing_m: float = 0.05
     ransac_reproj_threshold_px: float = 8.0
