@@ -3,9 +3,12 @@
 
 [camera]
 index = 0
-width = 1280
-height = 720
-fps = 30
+# The normal VRChat path deliberately leaves the RTX 2070 to VRChat and
+# SteamVR.  This is the same stable capture rate as the former rough-test
+# preset; raise it only after a low-impact session is known to work.
+width = 640
+height = 480
+fps = 15
 # Webcams default to autoexposure, which hunts under artificial light and
 # produces the motion blur that actually degrades keypoint quality. Lock it.
 lock_exposure = true
@@ -24,12 +27,12 @@ path = "calibration/intrinsics.json"
 
 [pose2d]
 # 'lightweight' | 'balanced' | 'performance'
-mode = "balanced"
+mode = "lightweight"
 backend = "onnxruntime"
-device = "cuda"
+device = "cpu"
 # One static camera and one person, so the detector is nearly pure overhead.
 # Re-run it every N frames or when tracking confidence collapses.
-detect_interval = 30
+detect_interval = 60
 bbox_padding = 0.25
 min_keypoint_score = 0.35
 # Fraction of body keypoints that must clear min_keypoint_score for the frame
@@ -47,8 +50,8 @@ path = "calibration/extrinsics.json"
 # Ignore a room solve whose pixel residual says it is not trustworthy; normal
 # runtime falls back to automatic headset-relative alignment instead.
 max_accepted_rms_px = 12.0
-# Two fresh pose/VR correspondences per second is ample for a room solve and
-# keeps the calibration deliberately light while SteamVR owns the GPU.
+# Room refinement is an advanced opt-in.  The normal tracking loop should not
+# periodically run a calibration solve while VRChat is rendering.
 sample_rate_hz = 2.0
 # Minimum accumulated correspondences before an extrinsics solve is attempted.
 # Headset-only calibration needs enough varied views to avoid a mirror-pose solve.
@@ -58,7 +61,7 @@ min_sample_spacing_m = 0.03
 ransac_reproj_threshold_px = 12.0
 # Keep refining online once solved, so knocking the camera does not end the
 # session. A new solve is only adopted if it fits better than the current one.
-online_refine = true
+online_refine = false
 refine_interval_s = 5.0
 # Head samples must span at least this much for a solve to be conditioned.
 # Correspondences from someone standing still are all the same correspondence.
@@ -71,11 +74,10 @@ height_m = 1.75
 path = "calibration/body.json"
 
 [lift]
-# 'anchored' pins the head depth to the headset, which is what makes the output
-# metric rather than merely plausible. It degrades to 'geometric', the Phase 1
-# baseline, whenever the headset or the camera calibration is unavailable.
-# 'neural' uses the trained lifter.
-method = "anchored"
+# Geometric lifting is the low-impact live path. It works with the automatic
+# headset-relative fallback and does not compete with VRChat for GPU memory.
+# Advanced users may select 'anchored' or 'neural' in configs/local.toml.
+method = "geometric"
 model_path = "models/lifter.onnx"
 window = 27
 # If the solved head lands further than this from where the headset says it is,

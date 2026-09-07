@@ -62,6 +62,16 @@ def test_default_runtime_uses_automatic_headset_alignment():
     assert config.osc.rebase_uncalibrated_to_head is True
 
 
+def test_default_runtime_uses_the_low_impact_vrchat_path():
+    config = load(local=False)
+    assert (config.camera.width, config.camera.height, config.camera.fps) == (640, 480, 15)
+    assert config.pose2d.mode == "lightweight"
+    assert config.pose2d.device == "cpu"
+    assert config.pose2d.detect_interval == 60
+    assert config.calibration.online_refine is False
+    assert config.lift.method == "geometric"
+
+
 def test_rejects_high_error_room_calibration():
     class Extrinsics:
         rms_error_px = 19.2
