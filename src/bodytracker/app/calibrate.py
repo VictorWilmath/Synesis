@@ -80,6 +80,7 @@ def calibrate_extrinsics_session(config: Config) -> int:
         "\nCamera extrinsics calibration\n"
         "  Stay in frame and move around: step side to side, forward and back,\n"
         "  crouch, and hold your controllers where the camera can see them.\n"
+        "  The headset alone is enough; controllers simply make it faster.\n"
         "  Cover as much of your play space as you can.\n\n"
         "  Synesis saves automatically when it has enough valid movement.\n"
         "  [c] clear samples    [q] abort\n"
@@ -133,11 +134,23 @@ def calibrate_extrinsics_session(config: Config) -> int:
         vr.close()
         cv2.destroyAllWindows()
 
+    counts = buffer.counts()
+    refine_offsets = all(counts[anchor.name] >= 4 for anchor in ANCHORS)
+    if not refine_offsets:
+        print("Solving from headset movement; controller offset refinement skipped.")
+    # A noisy intrinsics solve needs a correspondingly wider initial RANSAC
+    # gate. The final RMS value still reports the real quality of the result.
+    intrinsics_error = intrinsics.rms_error or 0.0
+    ransac_threshold_px = max(
+        config.calibration.ransac_reproj_threshold_px,
+        4.0 + 2.0 * intrinsics_error,
+    )
     extrinsics = solve_extrinsics(
         buffer.samples,
         intrinsics.matrix,
         intrinsics.distortion,
-        ransac_threshold_px=config.calibration.ransac_reproj_threshold_px,
+        ransac_threshold_px=ransac_threshold_px,
+        refine_offsets=refine_offsets,
     )
     if extrinsics is None:
         print("Calibration failed. Try again with more movement around the space.")

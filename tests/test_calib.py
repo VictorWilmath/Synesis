@@ -161,6 +161,14 @@ class TestSolveExtrinsics:
         assert geodesic_angle_degrees(result.rotation_cw, clean_scene.rotation_cw) < 0.5
         assert result.rms_error_px < 1.0
 
+    def test_solves_from_headset_only(self, clean_scene):
+        """A user may not have tracked controllers in view during setup."""
+        samples = [sample for sample in collect(clean_scene).samples if sample.anchor == "head"]
+        result = solve_extrinsics(samples, INTRINSICS, refine_offsets=False)
+        assert result is not None
+        assert np.linalg.norm(result.camera_position - CAMERA_POSITION) < 0.01
+        assert result.rms_error_px < 1.0
+
     def test_survives_realistic_keypoint_noise(self):
         """Three pixels of jitter is about what a 720p webcam gives you."""
         scene = build_scene(

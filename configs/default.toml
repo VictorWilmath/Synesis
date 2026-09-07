@@ -48,10 +48,11 @@ path = "calibration/extrinsics.json"
 # keeps the calibration deliberately light while SteamVR owns the GPU.
 sample_rate_hz = 2.0
 # Minimum accumulated correspondences before an extrinsics solve is attempted.
-min_samples = 120
+# This works even when only the headset, rather than both controllers, is visible.
+min_samples = 36
 # Discard samples where the subject barely moved; they add no information.
 min_sample_spacing_m = 0.05
-ransac_reproj_threshold_px = 8.0
+ransac_reproj_threshold_px = 12.0
 # Keep refining online once solved, so knocking the camera does not end the
 # session. A new solve is only adopted if it fits better than the current one.
 online_refine = true
