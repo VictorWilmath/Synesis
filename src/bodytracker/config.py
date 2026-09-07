@@ -109,6 +109,9 @@ class OSCConfig:
     port: int = 9000
     roles: list[str] = field(default_factory=lambda: ["hip", "left_foot", "right_foot"])
     send_head: bool = False
+    # Rough-test only: translate webcam-space tracker estimates around the
+    # current SteamVR headset before sending them to VRChat.
+    rebase_uncalibrated_to_head: bool = False
     send_rate_hz: int = 60
 
     def tracker_roles(self) -> list[TrackerRole]:

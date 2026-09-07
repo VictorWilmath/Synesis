@@ -26,6 +26,9 @@ method = "geometric"
 [osc]
 # VRChat uses this HMD reference to align incoming OSC tracker coordinates.
 send_head = true
+# Keep rough webcam tracker locations near the real headset during VRChat's
+# FBT setup. This is a smoke-test convenience, not camera calibration.
+rebase_uncalibrated_to_head = true
 
 [debug]
 overlay = true

@@ -16,7 +16,7 @@ from ..config import Config
 from ..osc import VRChatOSCSender
 from ..pose2d.estimator import Pose2DEstimator
 from ..skeleton import HEAD
-from ..types import DevicePose, FrameResult, VRState
+from ..types import DevicePose, FrameResult, TrackerTarget, VRState
 from . import overlay
 from .pipeline import Pipeline
 
@@ -43,6 +43,31 @@ def _osc_alignment_head(
             timestamp=result.timestamp,
         )
     return headset
+
+
+def _rebase_uncalibrated_targets(
+    result: FrameResult,
+    headset: DevicePose | None,
+) -> list[TrackerTarget]:
+    """Translate rough webcam targets around the real SteamVR headset.
+
+    This does not substitute for camera extrinsics: it only makes the rough
+    OSC smoke test usable by keeping its hip and feet near the avatar instead
+    of at the webcam's arbitrary origin.
+    """
+    if result.skeleton3d is None or headset is None or not headset.valid:
+        return result.targets
+    offset = np.asarray(headset.position) - result.skeleton3d.xyz[HEAD]
+    return [
+        TrackerTarget(
+            role=target.role,
+            position=target.position + offset,
+            rotation=target.rotation.copy(),
+            valid=target.valid,
+            stale=target.stale,
+        )
+        for target in result.targets
+    ]
 
 
 class Runtime:
@@ -159,10 +184,16 @@ class Runtime:
                 self._apply_extrinsics(refined)
 
         headset = vr.head if vr is not None else None
+        rebased = (
+            self.config.osc.rebase_uncalibrated_to_head
+            and not self.pipeline.context.calibrated
+        )
+        if rebased:
+            result.targets = _rebase_uncalibrated_targets(result, headset)
         head = _osc_alignment_head(
             result,
             headset,
-            calibrated=self.pipeline.context.calibrated,
+            calibrated=self.pipeline.context.calibrated or rebased,
         )
         self.sender.send(result.targets, head=head)
 
