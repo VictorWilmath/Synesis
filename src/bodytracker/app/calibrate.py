@@ -81,7 +81,8 @@ def calibrate_extrinsics_session(config: Config) -> int:
         "  Stay in frame and move around: step side to side, forward and back,\n"
         "  crouch, and hold your controllers where the camera can see them.\n"
         "  Cover as much of your play space as you can.\n\n"
-        "  [enter] solve and save (or exit if not ready)    [c] clear samples    [q] abort\n"
+        "  Synesis saves automatically when it has enough valid movement.\n"
+        "  [c] clear samples    [q] abort\n"
     )
 
     camera.open()
@@ -105,6 +106,8 @@ def calibrate_extrinsics_session(config: Config) -> int:
                 if latest_keypoints is not None and state is not None:
                     buffer.add(state, latest_keypoints)
 
+            ready_to_save = _meets_requirements(buffer, config)
+
             canvas = overlay.render(
                 frame,
                 _preview_result(timestamp, latest_keypoints),
@@ -114,6 +117,10 @@ def calibrate_extrinsics_session(config: Config) -> int:
             )
             cv2.imshow("calibrate-extrinsics", canvas)
 
+            if ready_to_save:
+                print("Enough room samples collected; solving and saving automatically.")
+                break
+
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 print("aborted")
@@ -121,11 +128,6 @@ def calibrate_extrinsics_session(config: Config) -> int:
             if key == ord("c"):
                 buffer.clear()
                 continue
-            if key in (13, 10):  # enter
-                if not _ready(buffer, config):
-                    print("Not enough data yet; closing without saving.")
-                    return 1
-                break
     finally:
         camera.close()
         vr.close()
@@ -167,30 +169,13 @@ def _meets_requirements(buffer: CorrespondenceBuffer, config: Config) -> bool:
     )
 
 
-def _ready(buffer: CorrespondenceBuffer, config: Config) -> bool:
-    """Same check as `_meets_requirements`, but says why it failed."""
-    if _meets_requirements(buffer, config):
-        return True
-    if len(buffer) < config.calibration.min_samples:
-        print(
-            f"Only {len(buffer)} correspondences, need "
-            f"{config.calibration.min_samples}. Keep moving."
-        )
-    else:
-        print(
-            f"Your movement only spanned {buffer.coverage():.2f} m. "
-            f"Need {config.calibration.min_coverage_m:.2f} m for a stable solve."
-        )
-    return False
-
-
 def _calibration_lines(buffer: CorrespondenceBuffer, config: Config, started: float) -> list[str]:
     counts = buffer.counts()
     lines = [
         f"samples {len(buffer)}/{config.calibration.min_samples}  "
         f"coverage {buffer.coverage():.2f}/{config.calibration.min_coverage_m:.2f} m",
         "  ".join(f"{anchor.name} {counts[anchor.name]}" for anchor in ANCHORS),
-        "ready - press enter to solve"
+        "enough samples collected - saving automatically"
         if _meets_requirements(buffer, config)
         else "keep moving around your play space",
         f"sampling at {config.calibration.sample_rate_hz:.0f} Hz",
@@ -204,6 +189,7 @@ def calibrate_intrinsics_session(config: Config) -> int:
     board = (9, 6)
     square_m = 0.025
     capture_interval_s = 5.0
+    target_views = 15
     camera = Webcam(config.camera)
     frames: list[np.ndarray] = []
     last_capture_at = float("-inf")
@@ -215,7 +201,8 @@ def calibrate_intrinsics_session(config: Config) -> int:
         "  Capture 15-25 views: near and far, centred and in the corners,\n"
         "  and tilted. Corner and tilted views are what pin down distortion.\n\n"
         f"  A valid view is captured automatically every {capture_interval_s:.0f} seconds.\n"
-        "  Move the board between captures. [enter] solve and save    [q] abort\n"
+        f"  It solves and saves automatically after {target_views} views.\n"
+        "  Move the board between captures. [q] abort\n"
     )
 
     camera.open()
@@ -252,19 +239,18 @@ def calibrate_intrinsics_session(config: Config) -> int:
                         if found
                         else "show the whole checkerboard to the camera"
                     ),
-                    "[enter] solve  [q] abort",
+                    "[q] abort",
                 ],
             )
             cv2.imshow("calibrate-intrinsics", canvas)
 
+            if len(frames) >= target_views:
+                print("Enough checkerboard views collected; solving and saving automatically.")
+                break
+
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 return 1
-            if key in (13, 10):
-                if len(frames) < 8:
-                    print(f"only {len(frames)} views, need at least 8")
-                    continue
-                break
     finally:
         camera.close()
         cv2.destroyAllWindows()
