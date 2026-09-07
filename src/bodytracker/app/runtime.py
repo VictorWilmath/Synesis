@@ -23,6 +23,13 @@ from .pipeline import Pipeline
 log = logging.getLogger(__name__)
 
 
+def _accept_extrinsics(extrinsics, max_rms_error_px: float):
+    """Reject an unreliable room solve in favour of automatic alignment."""
+    if extrinsics is None or extrinsics.rms_error_px > max_rms_error_px:
+        return None
+    return extrinsics
+
+
 def _osc_alignment_head(
     result: FrameResult,
     headset: DevicePose | None,
@@ -31,10 +38,9 @@ def _osc_alignment_head(
 ) -> DevicePose | None:
     """Pick an OSC head reference in the same space as the tracker poses.
 
-    A real headset pose is in SteamVR play space. Before camera extrinsics are
-    known, the lifted skeleton is only in the webcam's provisional space, so
-    sending the real headset would make VRChat align two unrelated spaces.
-    Use the lifted head instead until a room calibration exists.
+    A real headset pose is in SteamVR play space. If tracker targets are still
+    in raw webcam space, use the lifted head; after a room solve or automatic
+    headset-relative rebasing, use the real headset pose instead.
     """
     if not calibrated and result.skeleton3d is not None:
         return DevicePose(
@@ -118,7 +124,11 @@ class Runtime:
         from ..calib.extrinsics import load_extrinsics
         from ..calib.online import OnlineExtrinsicsRefiner
 
-        extrinsics = load_extrinsics(self.config.calibration.path)
+        loaded_extrinsics = load_extrinsics(self.config.calibration.path)
+        extrinsics = _accept_extrinsics(
+            loaded_extrinsics,
+            self.config.calibration.max_accepted_rms_px,
+        )
         if extrinsics is not None:
             self._apply_extrinsics(extrinsics)
             log.info(
@@ -126,10 +136,17 @@ class Runtime:
                 extrinsics.rms_error_px,
                 np.round(extrinsics.camera_position, 2),
             )
+        elif loaded_extrinsics is not None:
+            log.warning(
+                "ignoring camera extrinsics with %.1f px RMS (limit %.1f); "
+                "using automatic headset-relative alignment",
+                loaded_extrinsics.rms_error_px,
+                self.config.calibration.max_accepted_rms_px,
+            )
         else:
             log.warning(
                 "no camera extrinsics at %s. Output will be camera-relative and "
-                "will not line up with your play space. Run calibrate-extrinsics.",
+                "will use automatic headset-relative alignment.",
                 self.config.calibration.path,
             )
 
@@ -304,10 +321,21 @@ class Runtime:
         lines = [f"{self._fps():.0f} fps"]
         if self._latencies:
             lines[0] += f"  latency {np.median(self._latencies):.0f}ms"
-        if not self.pipeline.context.calibrated:
-            lines.append("UNCALIBRATED - run calibrate-extrinsics")
         if self.vr_source is None:
+            if not self.pipeline.context.calibrated:
+                lines.append("camera-relative (no headset)")
             lines.append("no HMD anchor")
+            return lines
+
+        rebased = (
+            self.config.osc.rebase_uncalibrated_to_head
+            and not self.pipeline.context.calibrated
+        )
+        if rebased:
+            lines.append("headset-aligned (rough mode)")
+            return lines
+        if not self.pipeline.context.calibrated:
+            lines.append("camera-relative (rough mode)")
             return lines
 
         diagnostics = self.pipeline.diagnostics()

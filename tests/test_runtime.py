@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from bodytracker.app.runtime import _osc_alignment_head, _rebase_uncalibrated_targets
+from bodytracker.app.runtime import (
+    _accept_extrinsics,
+    _osc_alignment_head,
+    _rebase_uncalibrated_targets,
+)
+from bodytracker.config import load
 from bodytracker.skeleton import HEAD, NUM_KEYPOINTS, TrackerRole
 from bodytracker.types import DevicePose, FrameResult, Skeleton3D, TrackerTarget
 
@@ -49,3 +54,16 @@ def test_rebases_rough_targets_around_the_live_headset():
 
     assert np.allclose(rebased[0].position, [2.0, 1.0, 4.0])
     assert np.allclose(result.targets[0].position, [0.4, 0.9, -2.0])
+
+
+def test_default_runtime_uses_automatic_headset_alignment():
+    config = load(local=False)
+    assert config.osc.send_head is True
+    assert config.osc.rebase_uncalibrated_to_head is True
+
+
+def test_rejects_high_error_room_calibration():
+    class Extrinsics:
+        rms_error_px = 19.2
+
+    assert _accept_extrinsics(Extrinsics(), 12.0) is None

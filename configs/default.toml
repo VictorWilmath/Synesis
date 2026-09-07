@@ -44,6 +44,9 @@ poll_hz = 90
 
 [calibration]
 path = "calibration/extrinsics.json"
+# Ignore a room solve whose pixel residual says it is not trustworthy; normal
+# runtime falls back to automatic headset-relative alignment instead.
+max_accepted_rms_px = 12.0
 # Two fresh pose/VR correspondences per second is ample for a room solve and
 # keeps the calibration deliberately light while SteamVR owns the GPU.
 sample_rate_hz = 2.0
@@ -114,7 +117,9 @@ port = 9000
 # minimal useful set. Valid roles: hip, chest, left_foot, right_foot,
 # left_knee, right_knee, left_elbow, right_elbow.
 roles = ["hip", "left_foot", "right_foot"]
-send_head = false
+# Out-of-the-box mode: align webcam-derived trackers to the live headset.
+send_head = true
+rebase_uncalibrated_to_head = true
 send_rate_hz = 60
 
 [debug]

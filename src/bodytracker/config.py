@@ -57,6 +57,9 @@ class VRConfig:
 @dataclass(slots=True)
 class CalibrationConfig:
     path: str = "calibration/extrinsics.json"
+    # High-RMS room solves are worse than no solve: use automatic headset
+    # alignment instead of loading a calibration that cannot be trusted.
+    max_accepted_rms_px: float = 12.0
     # Extrinsics needs varied, accurate samples rather than every video frame.
     # Limiting pose inference prevents it from starving SteamVR's compositor.
     sample_rate_hz: float = 2.0
@@ -109,10 +112,10 @@ class OSCConfig:
     host: str = "127.0.0.1"
     port: int = 9000
     roles: list[str] = field(default_factory=lambda: ["hip", "left_foot", "right_foot"])
-    send_head: bool = False
-    # Rough-test only: translate webcam-space tracker estimates around the
-    # current SteamVR headset before sending them to VRChat.
-    rebase_uncalibrated_to_head: bool = False
+    # Send a head reference and automatically rebase uncalibrated webcam poses
+    # around it. This makes the default setup usable without room calibration.
+    send_head: bool = True
+    rebase_uncalibrated_to_head: bool = True
     send_rate_hz: int = 60
 
     def tracker_roles(self) -> list[TrackerRole]:
