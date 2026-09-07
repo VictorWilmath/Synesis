@@ -59,7 +59,7 @@ online_refine = true
 refine_interval_s = 5.0
 # Head samples must span at least this much for a solve to be conditioned.
 # Correspondences from someone standing still are all the same correspondence.
-min_coverage_m = 0.60
+min_coverage_m = 0.30
 
 [body]
 # Filled in by `bodytracker calibrate-body`. Height is used to scale the

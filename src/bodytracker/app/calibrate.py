@@ -21,7 +21,7 @@ from dataclasses import replace
 import cv2
 import numpy as np
 
-from ..calib.anchors import CorrespondenceBuffer
+from ..calib.anchors import ANCHORS, CorrespondenceBuffer
 from ..calib.body import calibrate_body, save_body
 from ..calib.extrinsics import (
     MIN_COVERAGE_M,
@@ -74,15 +74,14 @@ def calibrate_extrinsics_session(config: Config) -> int:
     buffer = CorrespondenceBuffer(
         min_spacing_m=config.calibration.min_sample_spacing_m,
         min_score=max(0.5, config.pose2d.min_keypoint_score),
-        allowed_anchors=("head",),
     )
 
     print(
         "\nCamera extrinsics calibration\n"
         "  Stay in frame and move around: step side to side, forward and back,\n"
-        "  crouch, and turn your head naturally while staying in view.\n"
-        "  This first room solve deliberately uses the headset only.\n"
-        "  Cover as much of your play space as you can.\n\n"
+        "  crouch, turn your head, and keep both controllers visible.\n"
+        "  Stretch your arms wide, then raise and lower them as you move.\n"
+        "  You need roughly 30 cm of head movement, not a large room.\n\n"
         "  Synesis saves automatically when it has enough valid movement.\n"
         "  [c] clear samples    [q] abort\n"
     )
@@ -135,7 +134,9 @@ def calibrate_extrinsics_session(config: Config) -> int:
         vr.close()
         cv2.destroyAllWindows()
 
-    print("Solving from headset movement.")
+    counts = buffer.counts()
+    refine_offsets = all(counts[anchor.name] >= 8 for anchor in ANCHORS)
+    print("Solving from headset and controller movement.")
     # A noisy intrinsics solve needs a correspondingly wider initial RANSAC
     # gate. The final RMS value still reports the real quality of the result.
     intrinsics_error = intrinsics.rms_error or 0.0
@@ -148,7 +149,7 @@ def calibrate_extrinsics_session(config: Config) -> int:
         intrinsics.matrix,
         intrinsics.distortion,
         ransac_threshold_px=ransac_threshold_px,
-        refine_offsets=False,
+        refine_offsets=refine_offsets,
     )
     if extrinsics is None:
         print("Calibration failed. Try again with more movement around the space.")
@@ -185,7 +186,7 @@ def _calibration_lines(buffer: CorrespondenceBuffer, config: Config, started: fl
     lines = [
         f"samples {len(buffer)}/{config.calibration.min_samples}  "
         f"coverage {buffer.coverage():.2f}/{config.calibration.min_coverage_m:.2f} m",
-        f"headset samples {counts['head']}",
+        "  ".join(f"{anchor.name} {counts[anchor.name]}" for anchor in ANCHORS),
         "enough samples collected - saving automatically"
         if _meets_requirements(buffer, config)
         else "keep moving around your play space",

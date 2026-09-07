@@ -67,8 +67,9 @@ class CalibrationConfig:
     ransac_reproj_threshold_px: float = 8.0
     online_refine: bool = True
     refine_interval_s: float = 5.0
-    # How far the sampled head positions must span before a solve is trusted.
-    min_coverage_m: float = 0.60
+    # With visible hand controllers, a 30 cm head span plus arm motion gives
+    # enough 3D diversity for a stable solve in a compact room.
+    min_coverage_m: float = 0.30
 
 
 @dataclass(slots=True)

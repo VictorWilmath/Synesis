@@ -180,6 +180,20 @@ class TestSolveExtrinsics:
         assert np.linalg.norm(result.camera_position - CAMERA_POSITION) < 0.2
         assert result.rms_error_px < 15.0
 
+    def test_solves_from_noisy_headset_and_controller_data(self):
+        """Controllers make compact-room calibration practical."""
+        scene = build_scene(
+            intrinsics=INTRINSICS,
+            camera_position=CAMERA_POSITION,
+            frames=120,
+            noise_px=6.0,
+        )
+        samples = collect(scene, CorrespondenceBuffer(min_spacing_m=0.03)).samples[:60]
+        result = solve_extrinsics(samples, INTRINSICS, ransac_threshold_px=31.0)
+        assert result is not None
+        assert np.linalg.norm(result.camera_position - CAMERA_POSITION) < 0.2
+        assert result.rms_error_px < 15.0
+
     def test_survives_realistic_keypoint_noise(self):
         """Three pixels of jitter is about what a 720p webcam gives you."""
         scene = build_scene(
