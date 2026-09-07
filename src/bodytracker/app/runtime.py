@@ -15,11 +15,34 @@ from ..capture.webcam import Webcam
 from ..config import Config
 from ..osc import VRChatOSCSender
 from ..pose2d.estimator import Pose2DEstimator
-from ..types import FrameResult, VRState
+from ..skeleton import HEAD
+from ..types import DevicePose, FrameResult, VRState
 from . import overlay
 from .pipeline import Pipeline
 
 log = logging.getLogger(__name__)
+
+
+def _osc_alignment_head(
+    result: FrameResult,
+    headset: DevicePose | None,
+    *,
+    calibrated: bool,
+) -> DevicePose | None:
+    """Pick an OSC head reference in the same space as the tracker poses.
+
+    A real headset pose is in SteamVR play space. Before camera extrinsics are
+    known, the lifted skeleton is only in the webcam's provisional space, so
+    sending the real headset would make VRChat align two unrelated spaces.
+    Use the lifted head instead until a room calibration exists.
+    """
+    if not calibrated and result.skeleton3d is not None:
+        return DevicePose(
+            position=result.skeleton3d.xyz[HEAD].astype(np.float64, copy=True),
+            rotation=np.eye(3, dtype=np.float64),
+            timestamp=result.timestamp,
+        )
+    return headset
 
 
 class Runtime:
@@ -135,7 +158,12 @@ class Runtime:
             if refined is not None:
                 self._apply_extrinsics(refined)
 
-        head = vr.head if vr is not None else None
+        headset = vr.head if vr is not None else None
+        head = _osc_alignment_head(
+            result,
+            headset,
+            calibrated=self.pipeline.context.calibrated,
+        )
         self.sender.send(result.targets, head=head)
 
         # Latency measured from capture, so it includes everything the user
