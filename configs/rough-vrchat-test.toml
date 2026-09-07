@@ -1,0 +1,22 @@
+# A low-impact, no-calibration smoke test for VRChat.
+# It intentionally estimates play space from the webcam, so positions will be
+# approximate. Use it only to verify webcam pose -> OSC -> VRChat end to end.
+
+[camera]
+width = 640
+height = 480
+fps = 15
+
+[pose2d]
+mode = "lightweight"
+device = "cpu"
+detect_interval = 60
+
+[vr]
+enabled = false
+
+[lift]
+method = "geometric"
+
+[debug]
+overlay = true
