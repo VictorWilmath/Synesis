@@ -77,6 +77,7 @@ class CorrespondenceBuffer:
     min_spacing_m: float = 0.05
     min_score: float = 0.5
     max_samples: int = 600
+    allowed_anchors: tuple[str, ...] = ("head", "left_hand", "right_hand")
     samples: list[Correspondence] = field(default_factory=list)
     _head_positions: list[np.ndarray] = field(default_factory=list)
     rejected_close: int = 0
@@ -103,6 +104,8 @@ class CorrespondenceBuffer:
         poses = vr.anchors()
         added = 0
         for anchor in ANCHORS:
+            if anchor.name not in self.allowed_anchors:
+                continue
             pose = poses.get(anchor.name)
             if pose is None:
                 continue

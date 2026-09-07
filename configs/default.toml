@@ -48,10 +48,10 @@ path = "calibration/extrinsics.json"
 # keeps the calibration deliberately light while SteamVR owns the GPU.
 sample_rate_hz = 2.0
 # Minimum accumulated correspondences before an extrinsics solve is attempted.
-# This works even when only the headset, rather than both controllers, is visible.
-min_samples = 36
+# Headset-only calibration needs enough varied views to avoid a mirror-pose solve.
+min_samples = 60
 # Discard samples where the subject barely moved; they add no information.
-min_sample_spacing_m = 0.05
+min_sample_spacing_m = 0.03
 ransac_reproj_threshold_px = 12.0
 # Keep refining online once solved, so knocking the camera does not end the
 # session. A new solve is only adopted if it fits better than the current one.
@@ -59,7 +59,7 @@ online_refine = true
 refine_interval_s = 5.0
 # Head samples must span at least this much for a solve to be conditioned.
 # Correspondences from someone standing still are all the same correspondence.
-min_coverage_m = 0.35
+min_coverage_m = 0.60
 
 [body]
 # Filled in by `bodytracker calibrate-body`. Height is used to scale the

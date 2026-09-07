@@ -60,15 +60,15 @@ class CalibrationConfig:
     # Extrinsics needs varied, accurate samples rather than every video frame.
     # Limiting pose inference prevents it from starving SteamVR's compositor.
     sample_rate_hz: float = 2.0
-    # A headset-only session produces one correspondence per position; 36
-    # well-spread samples is robust while still practical in a small room.
-    min_samples: int = 36
-    min_sample_spacing_m: float = 0.05
+    # A headset-only session produces one correspondence per position. Sixty
+    # varied samples prevent a noisy webcam solve from choosing a mirror pose.
+    min_samples: int = 60
+    min_sample_spacing_m: float = 0.03
     ransac_reproj_threshold_px: float = 8.0
     online_refine: bool = True
     refine_interval_s: float = 5.0
     # How far the sampled head positions must span before a solve is trusted.
-    min_coverage_m: float = 0.35
+    min_coverage_m: float = 0.60
 
 
 @dataclass(slots=True)
