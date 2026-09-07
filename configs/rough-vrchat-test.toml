@@ -1,6 +1,6 @@
 # A low-impact, no-calibration smoke test for VRChat.
-# It intentionally estimates play space from the webcam, so positions will be
-# approximate. Use it only to verify webcam pose -> OSC -> VRChat end to end.
+# Webcam pose remains approximate, but the live HMD pose is sent only to align
+# this arbitrary camera space with the avatar's SteamVR space.
 
 [camera]
 width = 640
@@ -13,10 +13,19 @@ device = "cpu"
 detect_interval = 60
 
 [vr]
-enabled = false
+enabled = true
+
+[calibration]
+# Do not load or refine a room calibration in this rough test.
+path = "calibration/rough-test-extrinsics.json"
+online_refine = false
 
 [lift]
 method = "geometric"
+
+[osc]
+# VRChat uses this HMD reference to align incoming OSC tracker coordinates.
+send_head = true
 
 [debug]
 overlay = true
