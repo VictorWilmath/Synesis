@@ -1,1 +1,1 @@
-WIP webcam based tracking solution for SteamVR
+WIP webcam based tracking solution for VRChat OSC tracking
