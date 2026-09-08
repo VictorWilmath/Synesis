@@ -4,6 +4,7 @@ import numpy as np
 
 from bodytracker.app.runtime import (
     _accept_extrinsics,
+    _extrapolate_targets,
     _osc_alignment_head,
     _rebase_uncalibrated_targets,
 )
@@ -54,6 +55,30 @@ def test_rebases_rough_targets_around_the_live_headset():
 
     assert np.allclose(rebased[0].position, [2.0, 1.0, 4.0])
     assert np.allclose(result.targets[0].position, [0.4, 0.9, -2.0])
+
+
+def test_extrapolates_slow_webcam_tracker_positions_for_osc_output():
+    before = [
+        TrackerTarget(TrackerRole.HIP, np.array([0.0, 1.0, 0.0]), np.eye(3)),
+    ]
+    latest = [
+        TrackerTarget(TrackerRole.HIP, np.array([0.1, 1.0, 0.0]), np.eye(3)),
+    ]
+
+    predicted = _extrapolate_targets(latest, 1.0, before, 0.9, 1.05)
+
+    assert np.allclose(predicted[0].position, [0.15, 1.0, 0.0])
+    assert np.allclose(latest[0].position, [0.1, 1.0, 0.0])
+
+
+def test_stops_prediction_after_short_safety_horizon():
+    target = TrackerTarget(TrackerRole.HIP, np.array([0.1, 1.0, 0.0]), np.eye(3))
+    prior = TrackerTarget(TrackerRole.HIP, np.array([0.0, 1.0, 0.0]), np.eye(3))
+
+    predicted = _extrapolate_targets([target], 1.0, [prior], 0.9, 2.0)
+
+    # The 100 ms horizon prevents an old pose from flying away when tracking pauses.
+    assert np.allclose(predicted[0].position, [0.2, 1.0, 0.0])
 
 
 def test_default_runtime_uses_automatic_headset_alignment():

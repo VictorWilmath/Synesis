@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -21,6 +22,125 @@ from . import overlay
 from .pipeline import Pipeline
 
 log = logging.getLogger(__name__)
+
+
+def _copy_target(target: TrackerTarget) -> TrackerTarget:
+    return TrackerTarget(
+        role=target.role,
+        position=np.asarray(target.position, dtype=np.float64).copy(),
+        rotation=np.asarray(target.rotation, dtype=np.float64).copy(),
+        valid=target.valid,
+        stale=target.stale,
+    )
+
+
+def _extrapolate_targets(
+    latest: list[TrackerTarget],
+    latest_timestamp: float,
+    previous: list[TrackerTarget] | None,
+    previous_timestamp: float | None,
+    now: float,
+    *,
+    max_horizon_s: float = 0.10,
+    max_speed_mps: float = 4.0,
+) -> list[TrackerTarget]:
+    """Predict a short interval between slow webcam poses for 60 Hz OSC.
+
+    The camera may only provide 12–15 real poses per second.  A bounded linear
+    extrapolation prevents VRChat from seeing a freeze followed by a jump,
+    while the short horizon makes a bad webcam frame harmless.
+    """
+    out = [_copy_target(target) for target in latest]
+    if not previous or previous_timestamp is None:
+        return out
+    sample_dt = latest_timestamp - previous_timestamp
+    horizon = min(max(0.0, now - latest_timestamp), max_horizon_s)
+    if not 0.005 <= sample_dt <= 0.30 or horizon <= 0:
+        return out
+
+    previous_by_role = {target.role: target for target in previous}
+    for target in out:
+        prior = previous_by_role.get(target.role)
+        if prior is None:
+            continue
+        velocity = (target.position - prior.position) / sample_dt
+        speed = float(np.linalg.norm(velocity))
+        if speed <= max_speed_mps:
+            target.position += velocity * horizon
+    return out
+
+
+class _OSCOutputInterpolator:
+    """Continuously send the latest webcam pose at the OSC output rate."""
+
+    def __init__(self, sender: VRChatOSCSender, rate_hz: float) -> None:
+        self.sender = sender
+        self.interval_s = 1.0 / rate_hz if rate_hz > 0 else 0.0
+        self._lock = threading.Lock()
+        self._latest: tuple[list[TrackerTarget], DevicePose | None, float] | None = None
+        self._previous: tuple[list[TrackerTarget], float] | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self.interval_s <= 0 or self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="osc-output", daemon=True)
+        self._thread.start()
+
+    def publish(
+        self,
+        targets: list[TrackerTarget],
+        head: DevicePose | None,
+        timestamp: float,
+    ) -> None:
+        copied = [_copy_target(target) for target in targets]
+        copied_head = (
+            None
+            if head is None
+            else DevicePose(
+                position=np.asarray(head.position, dtype=np.float64).copy(),
+                rotation=np.asarray(head.rotation, dtype=np.float64).copy(),
+                valid=head.valid,
+                timestamp=head.timestamp,
+            )
+        )
+        with self._lock:
+            if self._latest is not None:
+                self._previous = (self._latest[0], self._latest[2])
+            self._latest = (copied, copied_head, timestamp)
+
+    def _snapshot(self, now: float) -> tuple[list[TrackerTarget], DevicePose | None] | None:
+        with self._lock:
+            if self._latest is None:
+                return None
+            latest, head, timestamp = self._latest
+            previous, previous_timestamp = (
+                self._previous if self._previous is not None else (None, None)
+            )
+            return (
+                _extrapolate_targets(latest, timestamp, previous, previous_timestamp, now),
+                head,
+            )
+
+    def _run(self) -> None:
+        next_send = time.monotonic()
+        while not self._stop.is_set():
+            now = time.monotonic()
+            snapshot = self._snapshot(now)
+            if snapshot is not None:
+                targets, head = snapshot
+                self.sender.send(targets, head=head, now=now, force=True)
+            next_send += self.interval_s
+            self._stop.wait(max(0.0, next_send - time.monotonic()))
+            if next_send < time.monotonic() - self.interval_s:
+                next_send = time.monotonic()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
 
 
 def _accept_extrinsics(extrinsics, max_rms_error_px: float):
@@ -107,6 +227,7 @@ class Runtime:
             send_head=config.osc.send_head,
             rate_hz=config.osc.send_rate_hz,
         )
+        self._output = _OSCOutputInterpolator(self.sender, config.osc.send_rate_hz)
 
         self.refiner = None
         self.recorder = None
@@ -212,7 +333,7 @@ class Runtime:
             headset,
             calibrated=self.pipeline.context.calibrated or rebased,
         )
-        self.sender.send(result.targets, head=head)
+        self._output.publish(result.targets, head, captured_at)
 
         # Latency measured from capture, so it includes everything the user
         # actually waits for, not just inference.
@@ -258,6 +379,7 @@ class Runtime:
         self._running = True
         self.camera.open()
         self.load_calibration()
+        self._output.start()
         log.info("tracking; press q in the overlay window or Ctrl-C to stop")
 
         try:
@@ -297,6 +419,7 @@ class Runtime:
 
     def close(self) -> None:
         self.camera.close()
+        self._output.stop()
         self.sender.close()
         if self.show_overlay:
             cv2.destroyAllWindows()
