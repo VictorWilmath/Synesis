@@ -63,11 +63,7 @@ class Webcam:
         if not capture.isOpened():
             raise RuntimeError(f"could not open camera index {cfg.index}")
 
-        if cfg.fourcc:
-            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*cfg.fourcc))
-        capture.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.width)
-        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.height)
-        capture.set(cv2.CAP_PROP_FPS, cfg.fps)
+        self._configure_format(capture)
         # Ask the driver for the shallowest queue it will give us; the reader
         # thread handles the rest.
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -83,6 +79,21 @@ class Webcam:
         self._running = True
         self._thread = threading.Thread(target=self._reader, name="webcam", daemon=True)
         self._thread.start()
+
+    def _configure_format(self, capture: cv2.VideoCapture) -> None:
+        """Ask for resolution before compressed format, then reassert FPS.
+
+        Many UVC webcams silently reset their pixel format to YUY2 whenever a
+        resolution changes.  Setting MJPG first therefore leaves a nominal
+        30 FPS request running at 12–15 FPS.  This order works with DirectShow
+        drivers that expose MJPG as a format choice.
+        """
+        cfg = self.config
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.width)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.height)
+        if cfg.fourcc:
+            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*cfg.fourcc))
+        capture.set(cv2.CAP_PROP_FPS, cfg.fps)
 
     def _lock_exposure(self, capture: cv2.VideoCapture) -> None:
         for value in _MANUAL_EXPOSURE_VALUES:
