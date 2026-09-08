@@ -105,7 +105,16 @@ def _lifter_factory(name: str, config):
     if name == "neural":
         from ..lift.neural import NeuralLifter
 
-        return lambda: NeuralLifter(config.lift.model_path, window=config.lift.window)
+        providers = (
+            ["CPUExecutionProvider"]
+            if config.lift.device == "cpu"
+            else ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        )
+        return lambda: NeuralLifter(
+            config.lift.model_path,
+            window=config.lift.window,
+            providers=providers,
+        )
     raise SystemExit(f"unknown lifter '{name}' (expected 'geometric', 'anchored', or 'neural')")
 
 

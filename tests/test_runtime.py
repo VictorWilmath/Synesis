@@ -64,12 +64,14 @@ def test_default_runtime_uses_automatic_headset_alignment():
 
 def test_default_runtime_uses_the_low_impact_vrchat_path():
     config = load(local=False)
-    assert (config.camera.width, config.camera.height, config.camera.fps) == (640, 480, 15)
+    assert (config.camera.width, config.camera.height, config.camera.fps) == (640, 480, 30)
+    assert config.camera.mirror is True
     assert config.pose2d.mode == "lightweight"
     assert config.pose2d.device == "cpu"
     assert config.pose2d.detect_interval == 60
     assert config.calibration.online_refine is False
-    assert config.lift.method == "geometric"
+    assert config.lift.method == "neural"
+    assert config.lift.device == "cpu"
 
 
 def test_rejects_high_error_room_calibration():

@@ -34,7 +34,12 @@ def _default_lifter(config: Config):
     if config.lift.method == "neural":
         from ..lift.neural import NeuralLifter
 
-        return NeuralLifter(config.lift.model_path, window=config.lift.window)
+        providers = (
+            ["CPUExecutionProvider"]
+            if config.lift.device == "cpu"
+            else ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        )
+        return NeuralLifter(config.lift.model_path, window=config.lift.window, providers=providers)
     return AnchoredLifter(min_score=config.pose2d.min_keypoint_score)
 
 

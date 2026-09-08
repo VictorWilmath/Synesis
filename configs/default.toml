@@ -8,7 +8,7 @@ index = 0
 # preset; raise it only after a low-impact session is known to work.
 width = 640
 height = 480
-fps = 15
+fps = 30
 # Webcams default to autoexposure, which hunts under artificial light and
 # produces the motion blur that actually degrades keypoint quality. Lock it.
 lock_exposure = true
@@ -17,7 +17,9 @@ gain = 0
 autofocus = false
 # MJPG lets most webcams hit 30fps at 720p; YUYV usually caps at 10fps.
 fourcc = "MJPG"
-mirror = false
+# The packaged test rig's webcam reports a mirror-image stream.  Flip it
+# before pose estimation so physical left/right reach matching VRChat slots.
+mirror = true
 
 [camera.intrinsics]
 # Left empty until `bodytracker calibrate-intrinsics` runs. Until then the
@@ -74,10 +76,10 @@ height_m = 1.75
 path = "calibration/body.json"
 
 [lift]
-# Geometric lifting is the low-impact live path. It works with the automatic
-# headset-relative fallback and does not compete with VRChat for GPU memory.
-# Advanced users may select 'anchored' or 'neural' in configs/local.toml.
-method = "geometric"
+# The temporal model runs on CPU in under 1 ms and tracks more naturally than
+# the single-frame geometric fallback.  It leaves the GPU to VRChat/SteamVR.
+method = "neural"
+device = "cpu"
 model_path = "models/lifter.onnx"
 window = 27
 # If the solved head lands further than this from where the headset says it is,

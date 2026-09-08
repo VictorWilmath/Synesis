@@ -86,6 +86,9 @@ class LiftConfig:
     # "anchored" pins the head to the HMD and falls back to "geometric" when
     # there is no headset or no calibration. "neural" is the trained lifter.
     method: str = "anchored"
+    # The temporal model is inexpensive on CPU and must not compete with
+    # SteamVR's compositor for the VR GPU.
+    device: str = "cpu"
     model_path: str = "models/lifter.onnx"
     window: int = 27
     max_head_residual_m: float = 0.35

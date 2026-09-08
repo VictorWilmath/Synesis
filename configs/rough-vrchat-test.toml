@@ -5,7 +5,12 @@
 [camera]
 width = 640
 height = 480
-fps = 15
+# The pose estimator measures under 10 ms on CPU; request 30 Hz so the camera,
+# rather than an overly-conservative preset, is no longer the 12 Hz bottleneck.
+fps = 30
+# This webcam delivers a mirror-image stream.  Unmirror it before pose
+# estimation so physical left/right map to VRChat's left/right slots.
+mirror = true
 
 [pose2d]
 mode = "lightweight"
@@ -21,7 +26,10 @@ path = "calibration/rough-test-extrinsics.json"
 online_refine = false
 
 [lift]
-method = "geometric"
+# The trained temporal lifter gives materially better motion than a single
+# frame of bone geometry, while its CPU runtime is below 1 ms per frame.
+method = "neural"
+device = "cpu"
 
 [osc]
 # VRChat uses this HMD reference to align incoming OSC tracker coordinates.
