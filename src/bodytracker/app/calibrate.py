@@ -28,6 +28,12 @@ from ..calib.extrinsics import (
     save_extrinsics,
     solve_extrinsics,
 )
+from ..calib.headset_alignment import (
+    fit_headset_alignment,
+    headset_forward_from_rotation,
+    save_headset_alignment,
+    source_forward_from_skeleton,
+)
 from ..capture.intrinsics import calibrate_intrinsics, load_intrinsics, save_intrinsics
 from ..capture.webcam import Webcam
 from ..config import Config
@@ -43,6 +49,107 @@ def _open_vr(config: Config):
     source = OpenVRSource()
     source.open()
     return source
+
+
+def calibrate_headset_alignment_session(config: Config) -> int:
+    """Save a SlimeVR-style yaw reset between the webcam model and the HMD.
+
+    This is intentionally a short stationary capture, not a room solve. It
+    makes the first useful output land in the same *orientation* as SteamVR
+    while the live HMD position anchors the body in the room every frame.
+    """
+    from .pipeline import Pipeline
+
+    try:
+        vr = _open_vr(config)
+    except Exception as exc:
+        log.error("cannot align without SteamVR: %s", exc)
+        return 1
+
+    intrinsics = load_intrinsics(
+        config.camera.intrinsics.path,
+        width=config.camera.width,
+        height=config.camera.height,
+        fallback_fov_deg=config.camera.intrinsics.fallback_fov_deg,
+    )
+    camera = Webcam(config.camera)
+    estimator = Pose2DEstimator(replace(config.pose2d, mode="lightweight", device="cpu"))
+    pipeline = Pipeline(config, intrinsics=intrinsics.matrix)
+    source_forwards: list[np.ndarray] = []
+    headset_forwards: list[np.ndarray] = []
+    headset_heights: list[float] = []
+    duration_s = config.alignment.capture_seconds
+
+    print(
+        "\nHeadset alignment\n"
+        "  Stand upright, square to the camera, with your feet shoulder-width apart.\n"
+        "  Look directly forward and keep your head and body still.\n"
+        "  Synesis will save automatically after a short capture.\n"
+        "  This is not room extrinsics calibration. [q] abort\n"
+    )
+
+    camera.open()
+    started = time.monotonic()
+    try:
+        while True:
+            frame_data = camera.read()
+            if frame_data is None:
+                continue
+            timestamp, frame = frame_data
+            state = vr.poll()
+            keypoints = estimator(frame, timestamp=timestamp)
+            result = pipeline.process(keypoints, state, timestamp=timestamp)
+
+            if result.skeleton3d is not None and state is not None and state.head is not None:
+                source_forward = source_forward_from_skeleton(result.skeleton3d.xyz)
+                headset_forward = headset_forward_from_rotation(state.head.rotation)
+                if source_forward is not None and headset_forward is not None and state.head.valid:
+                    source_forwards.append(source_forward)
+                    headset_forwards.append(headset_forward)
+                    headset_heights.append(float(state.head.position[1]))
+
+            elapsed = time.monotonic() - started
+            canvas = overlay.render(
+                frame,
+                result,
+                intrinsics=intrinsics.matrix,
+                min_score=config.pose2d.min_keypoint_score,
+                extra_lines=[
+                    f"hold neutral pose {min(elapsed, duration_s):.1f}/{duration_s:.1f}s",
+                    "usable orientation frames "
+                    f"{len(source_forwards)}/{config.alignment.min_samples}",
+                    "look forward; q abort",
+                ],
+            )
+            cv2.imshow("calibrate-headset-alignment", canvas)
+
+            if elapsed >= duration_s and len(source_forwards) >= config.alignment.min_samples:
+                break
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                print("aborted")
+                return 1
+    finally:
+        camera.close()
+        vr.close()
+        cv2.destroyAllWindows()
+
+    try:
+        alignment = fit_headset_alignment(source_forwards, headset_forwards, headset_heights)
+    except ValueError as exc:
+        print(f"Alignment failed: {exc}")
+        return 1
+
+    save_headset_alignment(alignment, config.alignment.path)
+    print(
+        f"\nSaved headset alignment to {config.alignment.path}\n"
+        f"  yaw offset {alignment.yaw_deg:.1f} deg; "
+        f"estimated height {alignment.height_m:.2f} m; "
+        f"orientation spread {alignment.yaw_spread_deg:.1f} deg\n"
+    )
+    if alignment.yaw_spread_deg > 15.0:
+        print("That capture was inconsistent. Re-run it while standing more squarely and still.")
+    return 0
 
 
 def calibrate_extrinsics_session(config: Config) -> int:

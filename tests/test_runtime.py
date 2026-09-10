@@ -81,10 +81,11 @@ def test_stops_prediction_after_short_safety_horizon():
     assert np.allclose(predicted[0].position, [0.2, 1.0, 0.0])
 
 
-def test_default_runtime_uses_automatic_headset_alignment():
+def test_default_runtime_uses_direct_steamvr_space_output():
     config = load(local=False)
-    assert config.osc.send_head is True
+    assert config.osc.send_head is False
     assert config.osc.rebase_uncalibrated_to_head is True
+    assert config.alignment.path == "calibration/headset_alignment.json"
 
 
 def test_default_runtime_uses_the_low_impact_vrchat_path():

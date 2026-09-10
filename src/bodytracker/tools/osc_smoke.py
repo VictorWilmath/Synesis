@@ -107,7 +107,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Slots: {slot_summary}")
     if len(roles) < MAX_TRACKERS:
         print(f"({len(roles)} of {MAX_TRACKERS} slots in use)")
-    print("Enable OSC in VRChat, then run full-body calibration. Ctrl-C to stop.\n")
+    if args.send_head:
+        print(
+            "Enable OSC in VRChat, then run full-body calibration. "
+            "The synthetic head is an alignment reference. Ctrl-C to stop.\n"
+        )
+    else:
+        print(
+            "Enable OSC in VRChat, then run full-body calibration. "
+            "Use VRChat's Auto-center OSC Trackers if needed. Ctrl-C to stop.\n"
+        )
 
     start = time.monotonic()
     interval = 1.0 / args.rate if args.rate > 0 else 0.0

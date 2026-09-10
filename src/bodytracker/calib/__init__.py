@@ -30,6 +30,11 @@ _LAZY = {
     "save_extrinsics": ("extrinsics", "save_extrinsics"),
     "solve_extrinsics": ("extrinsics", "solve_extrinsics"),
     "OnlineExtrinsicsRefiner": ("online", "OnlineExtrinsicsRefiner"),
+    "HeadsetAlignment": ("headset_alignment", "HeadsetAlignment"),
+    "align_targets_to_headset": ("headset_alignment", "align_targets_to_headset"),
+    "fit_headset_alignment": ("headset_alignment", "fit_headset_alignment"),
+    "load_headset_alignment": ("headset_alignment", "load_headset_alignment"),
+    "save_headset_alignment": ("headset_alignment", "save_headset_alignment"),
 }
 
 

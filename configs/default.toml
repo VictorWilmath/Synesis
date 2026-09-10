@@ -69,6 +69,14 @@ refine_interval_s = 5.0
 # Correspondences from someone standing still are all the same correspondence.
 min_coverage_m = 0.30
 
+[alignment]
+# A five-second neutral pose saves the webcam model's yaw relative to the
+# SteamVR room. This is the normal setup path; room extrinsics remains an
+# advanced accuracy calibration.
+path = "calibration/headset_alignment.json"
+capture_seconds = 5.0
+min_samples = 20
+
 [body]
 # Filled in by `bodytracker calibrate-body`. Height is used to scale the
 # generic bone-length prior until a per-user solve replaces it.
@@ -122,7 +130,9 @@ port = 9000
 # left_knee, right_knee, left_elbow, right_elbow.
 roles = ["hip", "left_foot", "right_foot"]
 # Out-of-the-box mode: align webcam-derived trackers to the live headset.
-send_head = true
+# Output is mapped to SteamVR room space before OSC. Keep VRChat from applying
+# a second, continuously-moving head-space transform.
+send_head = false
 rebase_uncalibrated_to_head = true
 send_rate_hz = 60
 

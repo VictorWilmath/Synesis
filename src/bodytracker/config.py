@@ -76,6 +76,19 @@ class CalibrationConfig:
 
 
 @dataclass(slots=True)
+class HeadsetAlignmentConfig:
+    """Low-friction model-space to SteamVR-space alignment.
+
+    This is deliberately separate from camera extrinsics. It requires only a
+    brief, neutral pose with the HMD on and is the normal first-run path.
+    """
+
+    path: str = "calibration/headset_alignment.json"
+    capture_seconds: float = 5.0
+    min_samples: int = 20
+
+
+@dataclass(slots=True)
 class BodyConfig:
     height_m: float = 1.75
     path: str = "calibration/body.json"
@@ -115,9 +128,10 @@ class OSCConfig:
     host: str = "127.0.0.1"
     port: int = 9000
     roles: list[str] = field(default_factory=lambda: ["hip", "left_foot", "right_foot"])
-    # Send a head reference and automatically rebase uncalibrated webcam poses
-    # around it. This makes the default setup usable without room calibration.
-    send_head: bool = True
+    # Synesis maps tracker positions into SteamVR play space itself. Sending
+    # the OSC head endpoints would make VRChat continuously move that already
+    # aligned source space again, so they are an advanced opt-in only.
+    send_head: bool = False
     rebase_uncalibrated_to_head: bool = True
     send_rate_hz: int = 60
 
@@ -137,6 +151,7 @@ class Config:
     pose2d: Pose2DConfig = field(default_factory=Pose2DConfig)
     vr: VRConfig = field(default_factory=VRConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
+    alignment: HeadsetAlignmentConfig = field(default_factory=HeadsetAlignmentConfig)
     body: BodyConfig = field(default_factory=BodyConfig)
     lift: LiftConfig = field(default_factory=LiftConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)

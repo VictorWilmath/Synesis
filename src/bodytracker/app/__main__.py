@@ -37,6 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("calibrate-intrinsics", help="solve the camera's focal length and distortion")
     sub.add_parser("calibrate-extrinsics", help="solve where the camera is, using the headset")
+    sub.add_parser(
+        "calibrate-headset-alignment",
+        help="save a short neutral-pose yaw alignment to the HMD",
+    )
 
     body = sub.add_parser("calibrate-body", help="measure your proportions")
     body.add_argument("--seconds", type=float, default=20.0)
@@ -44,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     smoke = sub.add_parser("osc-smoke", help="stream synthetic trackers to check the OSC wire")
     smoke.add_argument("--pattern", default="bob")
     smoke.add_argument("--seconds", type=float, default=30.0)
+    smoke.add_argument(
+        "--send-head",
+        action="store_true",
+        help="include a synthetic head reference for VRChat source-space alignment",
+    )
     smoke.add_argument("--dry-run", action="store_true")
 
     sub.add_parser("cameras", help="list attached cameras")
@@ -145,6 +154,11 @@ def main(argv: list[str] | None = None) -> int:
 
         return calibrate_extrinsics_session(config)
 
+    if args.command == "calibrate-headset-alignment":
+        from .calibrate import calibrate_headset_alignment_session
+
+        return calibrate_headset_alignment_session(config)
+
     if args.command == "calibrate-body":
         from .calibrate import calibrate_body_session
 
@@ -153,7 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "osc-smoke":
         from ..tools.osc_smoke import main as smoke_main
 
-        argv = ["--pattern", args.pattern, "--seconds", str(args.seconds)]
+        argv = ["--pattern", args.pattern, "--duration", str(args.seconds)]
+        if args.send_head:
+            argv.append("--send-head")
         if args.dry_run:
             argv.append("--dry-run")
         return smoke_main(argv)

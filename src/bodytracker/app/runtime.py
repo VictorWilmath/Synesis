@@ -11,9 +11,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ..calib.headset_alignment import align_targets_to_headset, load_headset_alignment
 from ..capture.intrinsics import load_intrinsics
 from ..capture.webcam import Webcam
 from ..config import Config
+from ..lift.kinematics import bone_lengths_from_height
 from ..osc import VRChatOSCSender
 from ..pose2d.estimator import Pose2DEstimator
 from ..skeleton import HEAD
@@ -230,6 +232,7 @@ class Runtime:
         self._output = _OSCOutputInterpolator(self.sender, config.osc.send_rate_hz)
 
         self.refiner = None
+        self.headset_alignment = None
         self.recorder = None
 
         self._frame_times: deque[float] = deque(maxlen=120)
@@ -240,7 +243,7 @@ class Runtime:
     # -- calibration --------------------------------------------------------
 
     def load_calibration(self) -> None:
-        """Load extrinsics and body proportions if they have been solved."""
+        """Load room calibration, the HMD yaw reset, and body proportions."""
         from ..calib.body import load_body
         from ..calib.extrinsics import load_extrinsics
         from ..calib.online import OnlineExtrinsicsRefiner
@@ -271,10 +274,25 @@ class Runtime:
                 self.config.calibration.path,
             )
 
+        self.headset_alignment = load_headset_alignment(self.config.alignment.path)
+        if self.headset_alignment is not None:
+            log.info(
+                "loaded headset alignment (yaw %.1f deg, height %.2f m, %d samples)",
+                self.headset_alignment.yaw_deg,
+                self.headset_alignment.height_m,
+                self.headset_alignment.samples,
+            )
+
         body = load_body(self.config.body.path)
         if body is not None:
             self.pipeline.set_body(body.height_m, body.bone_lengths)
             log.info("loaded body calibration (height %.2f m)", body.height_m)
+        elif self.headset_alignment is not None:
+            # SlimeVR similarly uses the HMD/floor reference to establish a
+            # useful first body scale. A measured body calibration still wins.
+            height_m = self.headset_alignment.height_m
+            self.pipeline.set_body(height_m, bone_lengths_from_height(height_m))
+            log.info("using headset-derived body height %.2f m", height_m)
 
         if self.vr_source is not None and self.config.calibration.online_refine:
             self.refiner = OnlineExtrinsicsRefiner(
@@ -327,7 +345,18 @@ class Runtime:
             and not self.pipeline.context.calibrated
         )
         if rebased:
-            result.targets = _rebase_uncalibrated_targets(result, headset)
+            if self.headset_alignment is not None and result.skeleton3d is not None and headset:
+                result.targets = align_targets_to_headset(
+                    result.targets,
+                    result.skeleton3d.xyz[HEAD],
+                    headset,
+                    self.headset_alignment,
+                )
+            else:
+                # Compatibility fallback until the short neutral-pose setup
+                # has been run. It only translates, so it cannot reliably
+                # establish forward/left/right in the SteamVR room.
+                result.targets = _rebase_uncalibrated_targets(result, headset)
         head = _osc_alignment_head(
             result,
             headset,
@@ -455,7 +484,10 @@ class Runtime:
             and not self.pipeline.context.calibrated
         )
         if rebased:
-            lines.append("headset-aligned (rough mode)")
+            if self.headset_alignment is not None:
+                lines.append("headset-anchored (yaw aligned)")
+            else:
+                lines.append("headset-aligned (translation only; run alignment)")
             return lines
         if not self.pipeline.context.calibrated:
             lines.append("camera-relative (rough mode)")
