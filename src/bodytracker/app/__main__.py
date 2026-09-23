@@ -46,7 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     body.add_argument("--seconds", type=float, default=20.0)
 
     smoke = sub.add_parser("osc-smoke", help="stream synthetic trackers to check the OSC wire")
-    smoke.add_argument("--pattern", default="bob")
+    smoke.add_argument(
+        "--pattern",
+        default="walk",
+        help="synthetic motion (default: alternating foot steps)",
+    )
     smoke.add_argument("--seconds", type=float, default=30.0)
     smoke.add_argument(
         "--send-head",

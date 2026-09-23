@@ -4,7 +4,7 @@ Streams canned, anatomically plausible tracker motion to VRChat. If the avatar
 follows it, the transport, slot assignment, handedness flip and Euler
 convention are all correct.
 
-    bodytracker-osc-smoke --pattern bob
+    bodytracker-osc-smoke --pattern walk
 
 In VRChat: Options -> OSC -> Enable, then run full-body calibration. Stand in
 the calibration pose and the synthetic trackers will be picked up as if they
@@ -56,9 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=9000, help="OSC port (default: %(default)s)")
     parser.add_argument(
         "--pattern",
-        default="bob",
+        default="walk",
         choices=PATTERNS,
-        help="motion to generate (default: %(default)s)",
+        help="motion to generate; walk visibly alternates the feet (default: %(default)s)",
     )
     parser.add_argument(
         "--roles",
