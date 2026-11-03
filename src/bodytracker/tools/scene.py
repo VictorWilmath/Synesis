@@ -45,12 +45,6 @@ class Scene:
     camera_position: np.ndarray
     height_m: float
 
-    def keypoint_arrays(self) -> tuple[np.ndarray, np.ndarray]:
-        return (
-            np.stack([f.keypoints.xy for f in self.frames]),
-            np.stack([f.play_xyz for f in self.frames]),
-        )
-
 
 def _yaw_matrix(degrees: float) -> np.ndarray:
     angle = np.radians(degrees)

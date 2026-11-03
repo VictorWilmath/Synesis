@@ -47,7 +47,6 @@ dev = [
 
 [project.scripts]
 bodytracker = "bodytracker.app.__main__:main"
-bodytracker-osc-smoke = "bodytracker.tools.osc_smoke:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

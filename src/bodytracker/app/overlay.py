@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from ..geom import camera_from_play, project_points
-from ..skeleton import KEYPOINT_NAMES, SKELETON_EDGES
+from ..skeleton import SKELETON_EDGES
 from ..types import FrameResult
 
 _GREEN = (0, 220, 0)
@@ -118,9 +118,3 @@ def render(
     draw_stats(canvas, lines)
 
     return canvas
-
-
-def lowest_confidence_joints(scores: np.ndarray, count: int = 3) -> list[str]:
-    """Names of the least confident joints, for diagnosing tracking failures."""
-    order = np.argsort(scores)[:count]
-    return [f"{KEYPOINT_NAMES[i]}={scores[i]:.2f}" for i in order]

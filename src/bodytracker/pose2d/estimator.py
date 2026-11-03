@@ -64,10 +64,6 @@ class Pose2DEstimator:
         self.tracking_losses = 0
         self.last_timings: dict[str, float] = {}
 
-    @property
-    def has_track(self) -> bool:
-        return self._bbox is not None
-
     def reset(self) -> None:
         """Force a fresh detection on the next frame."""
         self._bbox = None
