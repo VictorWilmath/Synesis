@@ -1,4 +1,9 @@
-"""The live tracking loop: camera in, OSC out."""
+"""The live tracking loop: camera in, OSC out.
+
+There is no setup step. With SteamVR running, the loop calibrates the camera
+from the skeleton and the headset while the user moves around normally, and
+only starts sending trackers to VRChat once that calibration is trustworthy.
+"""
 
 from __future__ import annotations
 
@@ -11,19 +16,33 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..calib.headset_alignment import align_targets_to_headset, load_headset_alignment
-from ..capture.intrinsics import load_intrinsics
+from ..calib.auto import (
+    AutoCalibrator,
+    CalibrationUpdate,
+    CameraCalibration,
+    load_calibration,
+    save_calibration,
+)
+from ..calib.body import BodyCalibration, load_body, save_body
 from ..capture.webcam import Webcam
 from ..config import Config
+from ..geom import intrinsics_from_fov
 from ..lift.kinematics import bone_lengths_from_height
 from ..osc import VRChatOSCSender
 from ..pose2d.estimator import Pose2DEstimator
-from ..skeleton import HEAD
 from ..types import DevicePose, FrameResult, TrackerTarget, VRState
+from ..vr.history import VRHistory
+from ..vr.source import standing_height_from_head_heights
 from . import overlay
 from .pipeline import Pipeline
 
 log = logging.getLogger(__name__)
+
+# Standing height is re-estimated from the headset this often, once there are
+# enough samples, and only applied when it moves by more than the threshold.
+_HEIGHT_UPDATE_INTERVAL_S = 10.0
+_HEIGHT_MIN_SAMPLES = 300
+_HEIGHT_CHANGE_M = 0.02
 
 
 def _copy_target(target: TrackerTarget) -> TrackerTarget:
@@ -112,6 +131,12 @@ class _OSCOutputInterpolator:
                 self._previous = (self._latest[0], self._latest[2])
             self._latest = (copied, copied_head, timestamp)
 
+    def clear(self) -> None:
+        """Stop sending until the next publish."""
+        with self._lock:
+            self._latest = None
+            self._previous = None
+
     def _snapshot(self, now: float) -> tuple[list[TrackerTarget], DevicePose | None] | None:
         with self._lock:
             if self._latest is None:
@@ -145,61 +170,18 @@ class _OSCOutputInterpolator:
             self._thread = None
 
 
-def _accept_extrinsics(extrinsics, max_rms_error_px: float):
-    """Reject an unreliable room solve in favour of automatic alignment."""
-    if extrinsics is None or extrinsics.rms_error_px > max_rms_error_px:
-        return None
-    return extrinsics
-
-
-def _osc_alignment_head(
-    result: FrameResult,
-    headset: DevicePose | None,
-    *,
-    calibrated: bool,
-) -> DevicePose | None:
-    """Pick an OSC head reference in the same space as the tracker poses.
-
-    A real headset pose is in SteamVR play space. If tracker targets are still
-    in raw webcam space, use the lifted head; after a room solve or automatic
-    headset-relative rebasing, use the real headset pose instead.
-    """
-    if not calibrated and result.skeleton3d is not None:
-        return DevicePose(
-            position=result.skeleton3d.xyz[HEAD].astype(np.float64, copy=True),
-            rotation=np.eye(3, dtype=np.float64),
-            timestamp=result.timestamp,
-        )
-    return headset
-
-
-def _rebase_uncalibrated_targets(
-    result: FrameResult,
-    headset: DevicePose | None,
-) -> list[TrackerTarget]:
-    """Translate rough webcam targets around the real SteamVR headset.
-
-    This does not substitute for camera extrinsics: it only makes the rough
-    OSC smoke test usable by keeping its hip and feet near the avatar instead
-    of at the webcam's arbitrary origin.
-    """
-    if result.skeleton3d is None or headset is None or not headset.valid:
-        return result.targets
-    offset = np.asarray(headset.position) - result.skeleton3d.xyz[HEAD]
-    return [
-        TrackerTarget(
-            role=target.role,
-            position=target.position + offset,
-            rotation=target.rotation.copy(),
-            valid=target.valid,
-            stale=target.stale,
-        )
-        for target in result.targets
-    ]
+def describe_calibration(calibration: CameraCalibration) -> str:
+    return (
+        f"camera at {np.round(calibration.camera_position, 2)} m, "
+        f"{calibration.fov_deg:.0f} deg FOV, "
+        f"{calibration.latency_s * 1000:.0f} ms frame delay, "
+        f"{calibration.rms_px:.1f} px fit, "
+        f"+-{calibration.position_std_m * 100:.0f} cm"
+    )
 
 
 class Runtime:
-    """Owns the camera, the model, the pipeline and the sender."""
+    """Owns the camera, the model, the calibrator, the pipeline and the sender."""
 
     def __init__(
         self,
@@ -207,21 +189,21 @@ class Runtime:
         *,
         vr_source: object | None = None,
         show_overlay: bool | None = None,
+        recalibrate: bool = False,
     ) -> None:
         self.config = config
         self.vr_source = vr_source
         self.show_overlay = config.debug.overlay if show_overlay is None else show_overlay
-
-        self.intrinsics = load_intrinsics(
-            config.camera.intrinsics.path,
-            width=config.camera.width,
-            height=config.camera.height,
-            fallback_fov_deg=config.camera.intrinsics.fallback_fov_deg,
-        )
+        self.recalibrate = recalibrate
 
         self.camera = Webcam(config.camera)
         self.estimator = Pose2DEstimator(config.pose2d)
-        self.pipeline = Pipeline(config, intrinsics=self.intrinsics.matrix)
+        self.pipeline = Pipeline(
+            config,
+            intrinsics=intrinsics_from_fov(
+                config.camera.width, config.camera.height, config.calibration.initial_fov_deg
+            ),
+        )
         self.sender = VRChatOSCSender(
             config.osc.tracker_roles(),
             host=config.osc.host,
@@ -231,10 +213,16 @@ class Runtime:
         )
         self._output = _OSCOutputInterpolator(self.sender, config.osc.send_rate_hz)
 
-        self.refiner = None
-        self.headset_alignment = None
+        self.vr_history = (
+            VRHistory(vr_source, poll_hz=config.vr.poll_hz) if vr_source is not None else None
+        )
+        self.calibrator: AutoCalibrator | None = None
+        self.calibration: CameraCalibration | None = None
+        self.latency_s = config.calibration.initial_latency_s
         self.recorder = None
 
+        self._head_heights: deque[float] = deque(maxlen=20_000)
+        self._last_height_update = -float("inf")
         self._frame_times: deque[float] = deque(maxlen=120)
         self._latencies: deque[float] = deque(maxlen=120)
         self._last_stats_print = 0.0
@@ -242,84 +230,123 @@ class Runtime:
 
     # -- calibration --------------------------------------------------------
 
+    def _frame_size(self) -> tuple[int, int]:
+        """The resolution the camera actually delivers, which is what keypoints use."""
+        properties = self.camera.properties()
+        width = int(properties.get("width") or 0) or self.config.camera.width
+        height = int(properties.get("height") or 0) or self.config.camera.height
+        return width, height
+
     def load_calibration(self) -> None:
-        """Load room calibration, the HMD yaw reset, and body proportions."""
-        from ..calib.body import load_body
-        from ..calib.extrinsics import load_extrinsics
-        from ..calib.online import OnlineExtrinsicsRefiner
-
-        loaded_extrinsics = load_extrinsics(self.config.calibration.path)
-        extrinsics = _accept_extrinsics(
-            loaded_extrinsics,
-            self.config.calibration.max_accepted_rms_px,
+        """Load body proportions and any saved camera calibration, then start calibrating."""
+        width, height = self._frame_size()
+        self.pipeline.set_intrinsics(
+            intrinsics_from_fov(width, height, self.config.calibration.initial_fov_deg)
         )
-        if extrinsics is not None:
-            self._apply_extrinsics(extrinsics)
-            log.info(
-                "loaded camera extrinsics (%.1f px RMS, camera at %s)",
-                extrinsics.rms_error_px,
-                np.round(extrinsics.camera_position, 2),
-            )
-        elif loaded_extrinsics is not None:
-            log.warning(
-                "ignoring camera extrinsics with %.1f px RMS (limit %.1f); "
-                "using automatic headset-relative alignment",
-                loaded_extrinsics.rms_error_px,
-                self.config.calibration.max_accepted_rms_px,
-            )
-        else:
-            log.warning(
-                "no camera extrinsics at %s. Output will be camera-relative and "
-                "will use automatic headset-relative alignment.",
-                self.config.calibration.path,
-            )
-
-        self.headset_alignment = load_headset_alignment(self.config.alignment.path)
-        if self.headset_alignment is not None:
-            log.info(
-                "loaded headset alignment (yaw %.1f deg, height %.2f m, %d samples)",
-                self.headset_alignment.yaw_deg,
-                self.headset_alignment.height_m,
-                self.headset_alignment.samples,
-            )
 
         body = load_body(self.config.body.path)
         if body is not None:
             self.pipeline.set_body(body.height_m, body.bone_lengths)
-            log.info("loaded body calibration (height %.2f m)", body.height_m)
-        elif self.headset_alignment is not None:
-            # SlimeVR similarly uses the HMD/floor reference to establish a
-            # useful first body scale. A measured body calibration still wins.
-            height_m = self.headset_alignment.height_m
-            self.pipeline.set_body(height_m, bone_lengths_from_height(height_m))
-            log.info("using headset-derived body height %.2f m", height_m)
+            log.info("loaded body proportions (height %.2f m)", body.height_m)
 
-        if self.vr_source is not None and self.config.calibration.online_refine:
-            self.refiner = OnlineExtrinsicsRefiner(
-                self.intrinsics,
-                interval_s=self.config.calibration.refine_interval_s,
-                min_samples=self.config.calibration.min_samples,
+        if self.vr_history is None:
+            log.warning("no SteamVR: output is camera-relative and the camera cannot be calibrated")
+            return
+
+        saved = (
+            None
+            if self.recalibrate
+            else load_calibration(self.config.calibration.path, width, height)
+        )
+        if saved is not None:
+            if saved.mirror != self.config.camera.mirror:
+                log.info(
+                    "using the mirror setting found during calibration (mirror=%s)", saved.mirror
+                )
+                self.config.camera.mirror = saved.mirror
+            self._apply_calibration(saved, reset=True)
+            log.info("loaded camera calibration: %s", describe_calibration(saved))
+        else:
+            log.info(
+                "no camera calibration yet. With the headset on, stand where the camera "
+                "can see you and move around normally; trackers start once the camera "
+                "is solved, usually within a minute."
             )
-            self.refiner.set_current(extrinsics)
 
-    def _apply_extrinsics(self, extrinsics) -> None:
-        self.pipeline.set_extrinsics(extrinsics.rotation_cw, extrinsics.translation_cw)
-        # The calibrator also solves where each device sits relative to its
-        # keypoint, and the anchored lifter needs the same numbers to pin the
-        # head in the right place.
-        if extrinsics.offsets and hasattr(self.pipeline.lifter, "offsets"):
-            self.pipeline.lifter.offsets = extrinsics.offsets
+        self.calibrator = AutoCalibrator(
+            self.config.calibration,
+            width,
+            height,
+            self.vr_history,
+            min_score=max(0.4, self.config.pose2d.min_keypoint_score),
+            current=saved,
+            mirror=self.config.camera.mirror,
+        )
+
+    def _apply_calibration(self, calibration: CameraCalibration, *, reset: bool) -> None:
+        self.calibration = calibration
+        self.latency_s = calibration.latency_s
+        self.pipeline.set_intrinsics(calibration.intrinsics)
+        self.pipeline.set_extrinsics(calibration.rotation_cw, calibration.translation_cw)
+        # The anchored lifter pins the head with the same device offsets the
+        # calibration solved for.
+        if hasattr(self.pipeline.lifter, "offsets"):
+            self.pipeline.lifter.offsets = dict(calibration.offsets)
+        if reset:
+            self.pipeline.reset()
+
+    def _handle(self, update: CalibrationUpdate | None) -> None:
+        if update is None:
+            return
+        if update.kind in ("calibrated", "refined"):
+            calibration = update.calibration
+            first = update.kind == "calibrated"
+            self._apply_calibration(calibration, reset=first)
+            save_calibration(calibration, self.config.calibration.path)
+            if first:
+                log.info("camera calibrated: %s", describe_calibration(calibration))
+                log.info("sending trackers to VRChat")
+            else:
+                log.info("camera calibration refined: %s", describe_calibration(calibration))
+        elif update.kind == "lost":
+            self.calibration = None
+            self.pipeline.clear_extrinsics()
+            self.pipeline.reset()
+            self._output.clear()
+        elif update.kind == "mirrored":
+            self.config.camera.mirror = self.calibrator.mirror
+            self.estimator.reset()
+            self.pipeline.reset()
+
+    @property
+    def sending(self) -> bool:
+        """Trackers go to VRChat only once they are in the SteamVR room."""
+        return self.vr_history is None or self.calibration is not None
 
     # -- main loop ----------------------------------------------------------
 
-    def _read_vr(self) -> VRState | None:
-        if self.vr_source is None:
+    def _vr_at(self, captured_at: float) -> VRState | None:
+        if self.vr_history is None:
             return None
-        try:
-            return self.vr_source.poll()
-        except Exception:
-            log.exception("VR poll failed; continuing without an anchor this frame")
-            return None
+        return self.vr_history.at(captured_at - self.latency_s)
+
+    def _track_height(self, vr: VRState | None, now: float) -> None:
+        if vr is None or vr.head is None or not vr.head.valid:
+            return
+        self._head_heights.append(float(vr.head.position[1]))
+        if len(self._head_heights) < _HEIGHT_MIN_SAMPLES:
+            return
+        if now - self._last_height_update < _HEIGHT_UPDATE_INTERVAL_S:
+            return
+        self._last_height_update = now
+        height = standing_height_from_head_heights(self._head_heights)
+        if height is None or not 1.2 <= height <= 2.3:
+            return
+        if abs(height - self.pipeline.context.height_m) < _HEIGHT_CHANGE_M:
+            return
+        self.pipeline.set_body(height, bone_lengths_from_height(height))
+        save_body(BodyCalibration.from_height(height), self.config.body.path)
+        log.info("standing height %.2f m, measured from the headset", height)
 
     def step(self) -> tuple[FrameResult, np.ndarray] | None:
         """Process one camera frame. Returns None if no frame arrived."""
@@ -329,40 +356,17 @@ class Runtime:
         captured_at, frame = frame_data
 
         keypoints = self.estimator(frame, timestamp=captured_at)
-        vr = self._read_vr()
+        if self.calibrator is not None:
+            self.calibrator.observe(keypoints)
+            self._handle(self.calibrator.update())
+
+        vr = self._vr_at(captured_at)
         result = self.pipeline.process(keypoints, vr, timestamp=captured_at)
         result.timings.update(self.estimator.last_timings)
+        self._track_height(vr, captured_at)
 
-        if self.refiner is not None:
-            self.refiner.observe(vr, keypoints)
-            refined = self.refiner.maybe_refine()
-            if refined is not None:
-                self._apply_extrinsics(refined)
-
-        headset = vr.head if vr is not None else None
-        rebased = (
-            self.config.osc.rebase_uncalibrated_to_head
-            and not self.pipeline.context.calibrated
-        )
-        if rebased:
-            if self.headset_alignment is not None and result.skeleton3d is not None and headset:
-                result.targets = align_targets_to_headset(
-                    result.targets,
-                    result.skeleton3d.xyz[HEAD],
-                    headset,
-                    self.headset_alignment,
-                )
-            else:
-                # Compatibility fallback until the short neutral-pose setup
-                # has been run. It only translates, so it cannot reliably
-                # establish forward/left/right in the SteamVR room.
-                result.targets = _rebase_uncalibrated_targets(result, headset)
-        head = _osc_alignment_head(
-            result,
-            headset,
-            calibrated=self.pipeline.context.calibrated or rebased,
-        )
-        self._output.publish(result.targets, head, captured_at)
+        if self.sending:
+            self._output.publish(result.targets, vr.head if vr is not None else None, captured_at)
 
         # Latency measured from capture, so it includes everything the user
         # actually waits for, not just inference.
@@ -381,7 +385,7 @@ class Runtime:
 
         self.recorder = SessionRecorder(
             SessionMeta(
-                intrinsics=self.intrinsics.matrix,
+                intrinsics=self.pipeline.context.intrinsics,
                 rotation_cw=self.pipeline.context.rotation_cw,
                 translation_cw=self.pipeline.context.translation_cw,
                 height_m=self.pipeline.context.height_m,
@@ -396,10 +400,14 @@ class Runtime:
         if self.recorder is None or len(self.recorder) == 0:
             log.warning("nothing recorded, not writing a session")
             return None
-        # The camera may have been calibrated part-way through, so take the
-        # extrinsics as they ended up rather than as they started.
-        self.recorder.meta.rotation_cw = self.pipeline.context.rotation_cw
-        self.recorder.meta.translation_cw = self.pipeline.context.translation_cw
+        # The camera is usually calibrated part-way through, so take the
+        # calibration as it ended up rather than as it started.
+        meta = self.recorder.meta
+        meta.intrinsics = self.pipeline.context.intrinsics
+        meta.rotation_cw = self.pipeline.context.rotation_cw
+        meta.translation_cw = self.pipeline.context.translation_cw
+        meta.height_m = self.pipeline.context.height_m
+        meta.offsets = getattr(self.pipeline.lifter, "offsets", None) or {}
         written = self.recorder.build().save(path)
         log.info("wrote %d frames to %s", len(self.recorder), written)
         return written
@@ -407,6 +415,8 @@ class Runtime:
     def run(self) -> None:
         self._running = True
         self.camera.open()
+        if self.vr_history is not None:
+            self.vr_history.start()
         self.load_calibration()
         self._output.start()
         log.info("tracking; press q in the overlay window or Ctrl-C to stop")
@@ -422,7 +432,7 @@ class Runtime:
                     canvas = overlay.render(
                         frame,
                         result,
-                        intrinsics=self.intrinsics.matrix,
+                        intrinsics=self.pipeline.context.intrinsics,
                         rotation_cw=self.pipeline.context.rotation_cw,
                         translation_cw=self.pipeline.context.translation_cw,
                         min_score=self.config.pose2d.min_keypoint_score,
@@ -449,6 +459,10 @@ class Runtime:
     def close(self) -> None:
         self.camera.close()
         self._output.stop()
+        if self.calibrator is not None:
+            self.calibrator.close()
+        if self.vr_history is not None:
+            self.vr_history.stop()
         self.sender.close()
         if self.show_overlay:
             cv2.destroyAllWindows()
@@ -473,36 +487,25 @@ class Runtime:
         lines = [f"{self._fps():.0f} fps"]
         if self._latencies:
             lines[0] += f"  latency {np.median(self._latencies):.0f}ms"
-        if self.vr_source is None:
-            if not self.pipeline.context.calibrated:
-                lines.append("camera-relative (no headset)")
-            lines.append("no HMD anchor")
+        if self.calibrator is None:
+            lines.append("no SteamVR: camera-relative output")
             return lines
 
-        rebased = (
-            self.config.osc.rebase_uncalibrated_to_head
-            and not self.pipeline.context.calibrated
-        )
-        if rebased:
-            if self.headset_alignment is not None:
-                lines.append("headset-anchored (yaw aligned)")
-            else:
-                lines.append("headset-aligned (translation only; run alignment)")
-            return lines
-        if not self.pipeline.context.calibrated:
-            lines.append("camera-relative (rough mode)")
+        lines.extend(self.calibrator.status_lines())
+        if self.calibration is None:
+            lines.append("not sending trackers yet")
             return lines
 
         diagnostics = self.pipeline.diagnostics()
-        anchored = "anchored" if diagnostics.get("anchored") else "ANCHOR LOST"
-        head = diagnostics.get("head_residual_m")
-        wrist = diagnostics.get("wrist_residual_m")
-        parts = [anchored]
-        if head is not None:
-            parts.append(f"head {head * 100:.0f}cm")
-        if wrist is not None:
-            parts.append(f"wrist {wrist * 100:.0f}cm")
-        lines.append(" ".join(parts))
+        if "anchored" in diagnostics:
+            parts = ["anchored" if diagnostics.get("anchored") else "ANCHOR LOST"]
+            head = diagnostics.get("head_residual_m")
+            wrist = diagnostics.get("wrist_residual_m")
+            if head is not None:
+                parts.append(f"head {head * 100:.0f}cm")
+            if wrist is not None:
+                parts.append(f"wrist {wrist * 100:.0f}cm")
+            lines.append(" ".join(parts))
         return lines
 
     def _maybe_print_stats(self) -> None:
@@ -514,12 +517,16 @@ class Runtime:
             return
         self._last_stats_print = now
         stats = self.pipeline.stats()
+        status = (
+            "; ".join(self.calibrator.status_lines()) if self.calibrator is not None else "no VR"
+        )
         log.info(
-            "%.0f fps, latency %.0f ms, tracked %.0f%%, dropped camera frames %d",
+            "%.0f fps, latency %.0f ms, tracked %.0f%%, dropped camera frames %d, %s",
             self._fps(),
             np.median(self._latencies) if self._latencies else 0.0,
             stats["track_rate"] * 100,
             self.camera.dropped_frames,
+            status,
         )
 
 
@@ -530,6 +537,7 @@ def run(
     show_overlay: bool | None = None,
     record_to: Path | str | None = None,
     record_label: str = "",
+    recalibrate: bool = False,
 ) -> None:
     """Entry point used by the CLI."""
     vr_source = None
@@ -541,14 +549,26 @@ def run(
             vr_source.open()
             log.info("connected to SteamVR")
         except Exception as exc:
-            log.warning(
-                "could not connect to SteamVR (%s). Running without the HMD "
-                "anchor, which is the whole advantage of this approach.",
-                exc,
-            )
-            vr_source = None
+            raise RuntimeError(
+                "Cannot start Synesis with the VRChat profile because SteamVR is not "
+                "available. Start SteamVR, wait until the headset is connected, then "
+                "launch Synesis again."
+            ) from exc
 
-    runtime = Runtime(config, vr_source=vr_source, show_overlay=show_overlay)
+    runtime = Runtime(
+        config, vr_source=vr_source, show_overlay=show_overlay, recalibrate=recalibrate
+    )
+    slots = ", ".join(f"{role.value}=tracker {slot}" for role, slot in runtime.sender.slots.items())
+    log.info(
+        "OSC output: %s:%d (%s)",
+        config.osc.host,
+        config.osc.port,
+        slots or "no tracker roles configured",
+    )
+    log.info(
+        "VRChat must have OSC enabled and its incoming OSC Debug view should show "
+        "tracker position/rotation messages."
+    )
     if record_to is not None:
         runtime.start_recording(label=record_label or Path(record_to).stem)
     try:
@@ -558,7 +578,3 @@ def run(
             runtime.save_recording(record_to)
         if vr_source is not None:
             vr_source.close()
-
-
-def ensure_calibration_dir(config: Config) -> None:
-    Path(config.calibration.path).parent.mkdir(parents=True, exist_ok=True)

@@ -95,9 +95,9 @@ def project_points(
 ) -> np.ndarray:
     """Pinhole-project camera-space points to pixels.
 
-    Distortion is deliberately not applied here; the calibrated path uses
-    ``cv2.projectPoints`` with the full distortion model. This exists for the
-    uncalibrated fallback and for tests, where a clean pinhole is what we want.
+    Lens distortion is not modelled anywhere in the pipeline: at webcam
+    resolutions it is small next to keypoint noise, and the automatic
+    calibration solves a plain pinhole.
     """
     pts = np.atleast_2d(np.asarray(points_camera, dtype=np.float64))
     depth = np.clip(pts[:, 2:3], 1e-6, None)
@@ -143,8 +143,8 @@ def look_at_extrinsics(
 def intrinsics_from_fov(width: int, height: int, fov_deg: float) -> np.ndarray:
     """Pinhole intrinsics from a horizontal field of view.
 
-    The fallback used before a checkerboard calibration exists. Most consumer
-    webcams sit between 55 and 78 degrees horizontally.
+    The starting guess before automatic calibration measures the lens. Most
+    consumer webcams sit between 55 and 78 degrees horizontally.
     """
     focal = (width / 2.0) / np.tan(np.radians(fov_deg) / 2.0)
     return np.array(

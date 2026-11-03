@@ -34,16 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-overlay", action="store_true", help="skip the debug window")
     run.add_argument("--record", metavar="PATH", help="also save the session for offline analysis")
     run.add_argument("--label", default="", help="name for the recorded session")
-
-    sub.add_parser("calibrate-intrinsics", help="solve the camera's focal length and distortion")
-    sub.add_parser("calibrate-extrinsics", help="solve where the camera is, using the headset")
-    sub.add_parser(
-        "calibrate-headset-alignment",
-        help="save a short neutral-pose yaw alignment to the HMD",
+    run.add_argument(
+        "--recalibrate",
+        action="store_true",
+        help="ignore the saved camera calibration and solve it again while tracking",
     )
-
-    body = sub.add_parser("calibrate-body", help="measure your proportions")
-    body.add_argument("--seconds", type=float, default=20.0)
 
     smoke = sub.add_parser("osc-smoke", help="stream synthetic trackers to check the OSC wire")
     smoke.add_argument(
@@ -139,34 +134,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         from .runtime import run
 
-        run(
-            config,
-            use_vr=not args.no_vr,
-            show_overlay=False if args.no_overlay else None,
-            record_to=args.record,
-            record_label=args.label,
-        )
+        try:
+            run(
+                config,
+                use_vr=not args.no_vr,
+                show_overlay=False if args.no_overlay else None,
+                record_to=args.record,
+                record_label=args.label,
+                recalibrate=args.recalibrate,
+            )
+        except (RuntimeError, OSError) as exc:
+            logging.getLogger(__name__).error("startup failed: %s", exc)
+            return 1
         return 0
-
-    if args.command == "calibrate-intrinsics":
-        from .calibrate import calibrate_intrinsics_session
-
-        return calibrate_intrinsics_session(config)
-
-    if args.command == "calibrate-extrinsics":
-        from .calibrate import calibrate_extrinsics_session
-
-        return calibrate_extrinsics_session(config)
-
-    if args.command == "calibrate-headset-alignment":
-        from .calibrate import calibrate_headset_alignment_session
-
-        return calibrate_headset_alignment_session(config)
-
-    if args.command == "calibrate-body":
-        from .calibrate import calibrate_body_session
-
-        return calibrate_body_session(config, duration_s=args.seconds)
 
     if args.command == "osc-smoke":
         from ..tools.osc_smoke import main as smoke_main

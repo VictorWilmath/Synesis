@@ -76,9 +76,16 @@ class Pipeline:
 
     # -- calibration plumbing --------------------------------------------
 
+    def set_intrinsics(self, intrinsics: np.ndarray) -> None:
+        self.context.intrinsics = np.asarray(intrinsics, dtype=np.float64)
+
     def set_extrinsics(self, rotation_cw: np.ndarray, translation_cw: np.ndarray) -> None:
         self.context.rotation_cw = rotation_cw
         self.context.translation_cw = translation_cw
+
+    def clear_extrinsics(self) -> None:
+        self.context.rotation_cw = None
+        self.context.translation_cw = None
 
     def set_body(self, height_m: float, bone_lengths: dict[tuple[int, int], float]) -> None:
         self.context.height_m = height_m

@@ -21,12 +21,6 @@ fourcc = "MJPG"
 # before pose estimation so physical left/right reach matching VRChat slots.
 mirror = true
 
-[camera.intrinsics]
-# Left empty until `bodytracker calibrate-intrinsics` runs. Until then the
-# runtime falls back to a pinhole guess from `fallback_fov_deg`.
-fallback_fov_deg = 62.0
-path = "calibration/intrinsics.json"
-
 [pose2d]
 # 'lightweight' | 'balanced' | 'performance'
 mode = "lightweight"
@@ -48,38 +42,41 @@ enabled = true
 poll_hz = 90
 
 [calibration]
-path = "calibration/extrinsics.json"
-# Ignore a room solve whose pixel residual says it is not trustworthy; normal
-# runtime falls back to automatic headset-relative alignment instead.
-max_accepted_rms_px = 12.0
-# Room refinement is an advanced opt-in.  The normal tracking loop should not
-# periodically run a calibration solve while VRChat is rendering.
-sample_rate_hz = 2.0
-# Minimum accumulated correspondences before an extrinsics solve is attempted.
-# Headset-only calibration needs enough varied views to avoid a mirror-pose solve.
-min_samples = 60
-# Discard samples where the subject barely moved; they add no information.
-min_sample_spacing_m = 0.03
-ransac_reproj_threshold_px = 12.0
-# Keep refining online once solved, so knocking the camera does not end the
-# session. A new solve is only adopted if it fits better than the current one.
-online_refine = false
-refine_interval_s = 5.0
-# Head samples must span at least this much for a solve to be conditioned.
-# Correspondences from someone standing still are all the same correspondence.
-min_coverage_m = 0.30
-
-[alignment]
-# A five-second neutral pose saves the webcam model's yaw relative to the
-# SteamVR room. This is the normal setup path; room extrinsics remains an
-# advanced accuracy calibration.
-path = "calibration/headset_alignment.json"
-capture_seconds = 5.0
-min_samples = 20
+# There is no calibration step. While `bodytracker run` tracks, it pairs the
+# head and wrists the camera sees with the headset and controllers SteamVR
+# reports, and solves the camera's position, lens and frame delay from them.
+# Trackers are sent once the solve is trustworthy; the result is saved here
+# and reused, and re-solved automatically if the camera is moved.
+path = "calibration/camera.json"
+# Starting guesses, both measured by the solve.
+initial_fov_deg = 62.0
+initial_latency_s = 0.05
+# Frame delays searched, in seconds.
+max_latency_s = 0.20
+latency_step_s = 0.02
+# New samples are considered at this rate, and kept only if something moved
+# at least min_sample_spacing_m since every sample already stored.
+sample_rate_hz = 10.0
+min_sample_spacing_m = 0.04
+min_samples = 150
+max_samples = 900
+# Solves run on the CPU in the background, never on the GPU VRChat needs.
+solve_interval_s = 3.0
+refine_interval_s = 30.0
+ransac_threshold_px = 10.0
+# Acceptance, at 640x480: most samples must agree, the fit must be tight and
+# the camera position known to within a few centimetres.
+min_inlier_ratio = 0.6
+max_rms_px = 8.0
+max_position_std_m = 0.05
+max_focal_std = 0.04
+# A median error this large over monitor_frames samples means the camera moved.
+moved_error_px = 30.0
+monitor_frames = 40
 
 [body]
-# Filled in by `bodytracker calibrate-body`. Height is used to scale the
-# generic bone-length prior until a per-user solve replaces it.
+# Height is measured from the headset while tracking and saved here. It scales
+# the generic bone-length prior.
 height_m = 1.75
 path = "calibration/body.json"
 
@@ -129,11 +126,9 @@ port = 9000
 # minimal useful set. Valid roles: hip, chest, left_foot, right_foot,
 # left_knee, right_knee, left_elbow, right_elbow.
 roles = ["hip", "left_foot", "right_foot"]
-# Out-of-the-box mode: align webcam-derived trackers to the live headset.
-# Output is mapped to SteamVR room space before OSC. Keep VRChat from applying
-# a second, continuously-moving head-space transform.
+# Trackers are already in SteamVR room space, which is VRChat's tracking
+# space. Sending the head reference would make VRChat move them a second time.
 send_head = false
-rebase_uncalibrated_to_head = true
 send_rate_hz = 60
 
 [debug]

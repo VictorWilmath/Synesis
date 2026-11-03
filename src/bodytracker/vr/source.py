@@ -7,12 +7,13 @@ matters because the interesting failures are the ones you want to replay.
 
 from __future__ import annotations
 
-import bisect
+from collections.abc import Sequence
 from typing import Protocol
 
 import numpy as np
 
-from ..types import DevicePose, VRState
+from ..types import VRState
+from .history import interpolate_state
 
 
 class VRSource(Protocol):
@@ -29,9 +30,7 @@ class RecordedVRSource:
     """Replays captured VR states, matched to the nearest timestamp.
 
     Camera frames and SteamVR poses arrive on unrelated clocks, so playback has
-    to interpolate rather than assume they line up. Positions are interpolated
-    linearly; rotations take the nearest sample, which is accurate enough at
-    90 Hz.
+    to interpolate rather than assume they line up.
     """
 
     def __init__(self, states: list[VRState]) -> None:
@@ -55,42 +54,10 @@ class RecordedVRSource:
 
     def at(self, timestamp: float) -> VRState | None:
         """The VR state at an arbitrary time, interpolated between samples."""
-        if not self.states:
-            return None
-        if timestamp <= self._times[0]:
-            return self.states[0]
-        if timestamp >= self._times[-1]:
-            return self.states[-1]
+        return interpolate_state(self.states, self._times, timestamp)
 
-        index = bisect.bisect_left(self._times, timestamp)
-        before, after = self.states[index - 1], self.states[index]
-        span = after.timestamp - before.timestamp
-        if span <= 0:
-            return after
-        weight = (timestamp - before.timestamp) / span
-
-        return VRState(
-            head=_lerp_pose(before.head, after.head, weight, timestamp),
-            left_hand=_lerp_pose(before.left_hand, after.left_hand, weight, timestamp),
-            right_hand=_lerp_pose(before.right_hand, after.right_hand, weight, timestamp),
-            timestamp=timestamp,
-        )
-
-
-def _lerp_pose(
-    before: DevicePose | None,
-    after: DevicePose | None,
-    weight: float,
-    timestamp: float,
-) -> DevicePose | None:
-    if before is None or after is None or not before.valid or not after.valid:
-        return after if after is not None and after.valid else before
-    return DevicePose(
-        position=(1.0 - weight) * before.position + weight * after.position,
-        rotation=(after if weight >= 0.5 else before).rotation.copy(),
-        valid=True,
-        timestamp=timestamp,
-    )
+    def at_many(self, timestamps: Sequence[float]) -> list[VRState | None]:
+        return [self.at(t) for t in timestamps]
 
 
 def head_height(state: VRState) -> float | None:
@@ -107,8 +74,15 @@ def estimate_standing_height(states: list[VRState]) -> float | None:
     a moment of reaching up does not set the value, then adds the offset from
     the headset to the top of the head.
     """
-    heights = [h for h in (head_height(s) for s in states) if h is not None and h > 0.5]
-    if len(heights) < 10:
+    return standing_height_from_head_heights(
+        [h for h in (head_height(s) for s in states) if h is not None]
+    )
+
+
+def standing_height_from_head_heights(heights: Sequence[float]) -> float | None:
+    """Standing height from raw headset heights above the floor."""
+    usable = [h for h in heights if h > 0.5]
+    if len(usable) < 10:
         return None
     # The HMD sits roughly at eye level, which is about 0.93 of stature.
-    return float(np.percentile(heights, 90) / 0.93)
+    return float(np.percentile(usable, 90) / 0.93)

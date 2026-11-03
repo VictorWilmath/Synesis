@@ -1,23 +1,11 @@
 """Calibration: where the camera is, and how the user is proportioned."""
 
-from .anchors import (
-    ANCHORS,
-    Anchor,
-    Correspondence,
-    CorrespondenceBuffer,
-    build_point_arrays,
-    pack_offsets,
-    unpack_offsets,
-)
+from .anchors import ANCHOR_BY_NAME, ANCHORS, Anchor
 
 __all__ = [
     "ANCHORS",
+    "ANCHOR_BY_NAME",
     "Anchor",
-    "Correspondence",
-    "CorrespondenceBuffer",
-    "build_point_arrays",
-    "pack_offsets",
-    "unpack_offsets",
 ]
 
 _LAZY = {
@@ -25,16 +13,11 @@ _LAZY = {
     "calibrate_body": ("body", "calibrate_body"),
     "load_body": ("body", "load_body"),
     "save_body": ("body", "save_body"),
-    "CameraExtrinsics": ("extrinsics", "CameraExtrinsics"),
-    "load_extrinsics": ("extrinsics", "load_extrinsics"),
-    "save_extrinsics": ("extrinsics", "save_extrinsics"),
-    "solve_extrinsics": ("extrinsics", "solve_extrinsics"),
-    "OnlineExtrinsicsRefiner": ("online", "OnlineExtrinsicsRefiner"),
-    "HeadsetAlignment": ("headset_alignment", "HeadsetAlignment"),
-    "align_targets_to_headset": ("headset_alignment", "align_targets_to_headset"),
-    "fit_headset_alignment": ("headset_alignment", "fit_headset_alignment"),
-    "load_headset_alignment": ("headset_alignment", "load_headset_alignment"),
-    "save_headset_alignment": ("headset_alignment", "save_headset_alignment"),
+    "AutoCalibrator": ("auto", "AutoCalibrator"),
+    "CameraCalibration": ("auto", "CameraCalibration"),
+    "load_calibration": ("auto", "load_calibration"),
+    "save_calibration": ("auto", "save_calibration"),
+    "solve_camera": ("auto", "solve_camera"),
 }
 
 

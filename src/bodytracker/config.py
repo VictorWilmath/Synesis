@@ -17,12 +17,6 @@ from .skeleton import TrackerRole
 
 
 @dataclass(slots=True)
-class IntrinsicsConfig:
-    fallback_fov_deg: float = 62.0
-    path: str = "calibration/intrinsics.json"
-
-
-@dataclass(slots=True)
 class CameraConfig:
     index: int = 0
     width: int = 1280
@@ -34,7 +28,6 @@ class CameraConfig:
     autofocus: bool = False
     fourcc: str = "MJPG"
     mirror: bool = False
-    intrinsics: IntrinsicsConfig = field(default_factory=IntrinsicsConfig)
 
 
 @dataclass(slots=True)
@@ -56,36 +49,33 @@ class VRConfig:
 
 @dataclass(slots=True)
 class CalibrationConfig:
-    path: str = "calibration/extrinsics.json"
-    # High-RMS room solves are worse than no solve: use automatic headset
-    # alignment instead of loading a calibration that cannot be trusted.
-    max_accepted_rms_px: float = 12.0
-    # Extrinsics needs varied, accurate samples rather than every video frame.
-    # Limiting pose inference prevents it from starving SteamVR's compositor.
-    sample_rate_hz: float = 2.0
-    # A headset-only session produces one correspondence per position. Sixty
-    # varied samples prevent a noisy webcam solve from choosing a mirror pose.
-    min_samples: int = 60
-    min_sample_spacing_m: float = 0.03
-    ransac_reproj_threshold_px: float = 8.0
-    online_refine: bool = True
-    refine_interval_s: float = 5.0
-    # With visible hand controllers, a 30 cm head span plus arm motion gives
-    # enough 3D diversity for a stable solve in a compact room.
-    min_coverage_m: float = 0.30
+    """Automatic camera calibration from the skeleton and SteamVR poses."""
 
-
-@dataclass(slots=True)
-class HeadsetAlignmentConfig:
-    """Low-friction model-space to SteamVR-space alignment.
-
-    This is deliberately separate from camera extrinsics. It requires only a
-    brief, neutral pose with the HMD on and is the normal first-run path.
-    """
-
-    path: str = "calibration/headset_alignment.json"
-    capture_seconds: float = 5.0
-    min_samples: int = 20
+    path: str = "calibration/camera.json"
+    # Lens assumed until the solve measures it.
+    initial_fov_deg: float = 62.0
+    # Frame delay assumed until the solve measures it, and the range searched.
+    initial_latency_s: float = 0.05
+    max_latency_s: float = 0.20
+    latency_step_s: float = 0.02
+    # Frames per second considered for new samples; most are then skipped as
+    # repeats unless the user has moved.
+    sample_rate_hz: float = 10.0
+    min_sample_spacing_m: float = 0.04
+    min_samples: int = 150
+    max_samples: int = 900
+    solve_interval_s: float = 3.0
+    refine_interval_s: float = 30.0
+    ransac_threshold_px: float = 10.0
+    # Acceptance: how well the samples must fit and how well determined the
+    # camera must be before anything is sent to VRChat.
+    min_inlier_ratio: float = 0.6
+    max_rms_px: float = 8.0
+    max_position_std_m: float = 0.05
+    max_focal_std: float = 0.04
+    # A sustained reprojection error this large means the camera was moved.
+    moved_error_px: float = 30.0
+    monitor_frames: int = 40
 
 
 @dataclass(slots=True)
@@ -132,7 +122,6 @@ class OSCConfig:
     # the OSC head endpoints would make VRChat continuously move that already
     # aligned source space again, so they are an advanced opt-in only.
     send_head: bool = False
-    rebase_uncalibrated_to_head: bool = True
     send_rate_hz: int = 60
 
     def tracker_roles(self) -> list[TrackerRole]:
@@ -151,7 +140,6 @@ class Config:
     pose2d: Pose2DConfig = field(default_factory=Pose2DConfig)
     vr: VRConfig = field(default_factory=VRConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
-    alignment: HeadsetAlignmentConfig = field(default_factory=HeadsetAlignmentConfig)
     body: BodyConfig = field(default_factory=BodyConfig)
     lift: LiftConfig = field(default_factory=LiftConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)

@@ -1,8 +1,9 @@
 """SteamVR device poses, the metric anchor this whole approach rests on."""
 
+from .history import VRHistory, interpolate_state
 from .source import RecordedVRSource, VRSource
 
-__all__ = ["RecordedVRSource", "VRSource"]
+__all__ = ["RecordedVRSource", "VRHistory", "VRSource", "interpolate_state"]
 
 
 def __getattr__(name: str):
