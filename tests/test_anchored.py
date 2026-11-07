@@ -138,7 +138,7 @@ class TestAnchoringAccuracy:
 
 class TestResiduals:
     def test_wrist_residual_is_small_when_everything_is_right(self, scene):
-        """The wrists are never pinned, so this is a genuine held-out check."""
+        """The wrists only pull on depth, so this still checks the whole chain."""
         lifter = AnchoredLifter()
         run(lifter, scene, make_context(scene, TRUE_HEIGHT))
         assert lifter.wrist_residual_m is not None

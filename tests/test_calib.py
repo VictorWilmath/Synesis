@@ -19,6 +19,7 @@ from bodytracker.calib.auto import (
     AutoCalibrator,
     CameraCalibration,
     SampleCollector,
+    SampleSet,
     assess,
     focal_from_fov,
     load_calibration,
@@ -118,6 +119,12 @@ class TestSceneFixture:
         heads = np.array([f.play_xyz[HEAD] for f in clean_scene.frames])
         assert np.linalg.norm(heads.max(axis=0) - heads.min(axis=0)) > 1.0
 
+    def test_in_place_motion_fits_a_small_play_space(self):
+        scene = make_scene(seconds=8.0, motion="in_place")
+        heads = np.array([f.play_xyz[HEAD] for f in scene.frames])
+        spread = heads.max(axis=0) - heads.min(axis=0)
+        assert spread[0] < 0.5 and spread[2] < 0.5
+
     def test_everything_is_in_front_of_the_camera(self, clean_scene):
         from bodytracker.geom import camera_from_play
 
@@ -211,6 +218,15 @@ class TestSolveCamera:
         assert result.fov_deg == pytest.approx(TRUE_FOV, abs=2.0)
         assert result.latency_s == pytest.approx(LATENCY, abs=0.02)
 
+    def test_finds_a_long_webcam_delay(self):
+        """A webcam in a dim room on auto exposure delivered frames over 200 ms late."""
+        scene = make_scene(seconds=16.0, noise_px=3.0, motion="in_place", seed=7)
+        result = solve(collect(scene, latency=0.3))
+        assert result is not None
+        assert result.latency_s == pytest.approx(0.3, abs=0.02)
+        assert np.linalg.norm(result.camera_position - CAMERA_POSITION) < 0.10
+        assert assess(result, CONFIG) is None
+
     def test_reports_an_honest_uncertainty(self, noisy_scene):
         """The acceptance gate trusts this number, so it must track the real error."""
         result = solve(collect(noisy_scene))
@@ -273,10 +289,16 @@ class TestSolveCamera:
         assert np.linalg.norm(unmirrored.camera_position - CAMERA_POSITION) < 0.02
 
 
-def drive(calibrator: AutoCalibrator, scene, *, until: str | None = None, **kwargs):
-    """Feed a scene frame by frame, waiting out any background solve as it goes."""
+def drive(calibrator: AutoCalibrator, scene, *, until: str | None = None, mirror: bool = False):
+    """Feed a scene frame by frame, waiting out any background solve as it goes.
+
+    `mirror` is whether the webcam's own stream is mirrored. The calibrator's
+    mirror setting flips it back, as the runtime's webcam does.
+    """
     updates = []
-    for keypoints in camera_frames(scene, **kwargs):
+    streams = zip(camera_frames(scene), camera_frames(scene, mirror=True), strict=True)
+    for plain, mirrored in streams:
+        keypoints = mirrored if mirror != calibrator.mirror else plain
         calibrator.observe(keypoints)
         update = calibrator.update()
         calibrator.close()
@@ -298,11 +320,24 @@ class TestAutoCalibrator:
         assert np.linalg.norm(result.camera_position - CAMERA_POSITION) < 0.05
         assert result.latency_s == pytest.approx(LATENCY, abs=0.02)
 
+    def test_calibrates_without_walking_around(self):
+        """A small play space: standing on one spot, reaching, turning and crouching."""
+        camera = np.array([0.3, 1.3, 2.0])
+        scene = make_scene(
+            seconds=30.0, noise_px=3.0, motion="in_place", camera_position=camera, seed=5
+        )
+        calibrator = AutoCalibrator(CONFIG, WIDTH, HEIGHT, history_for(scene), background=False)
+        updates = drive(calibrator, scene, until="calibrated")
+
+        assert [u.kind for u in updates] == ["calibrated"]
+        assert np.linalg.norm(calibrator.current.camera_position - camera) < 0.10
+        assert calibrator.current.fov_deg == pytest.approx(TRUE_FOV, abs=2.0)
+
     def test_says_what_it_needs_while_calibrating(self, clean_scene):
         calibrator = AutoCalibrator(
             CONFIG, WIDTH, HEIGHT, history_for(clean_scene), background=False
         )
-        assert "move around" in calibrator.status_lines()[0]
+        assert "reach around" in calibrator.status_lines()[0]
 
     def test_never_calibrates_from_someone_standing_still(self, clean_scene):
         frame = clean_scene.frames[0]
@@ -323,7 +358,20 @@ class TestAutoCalibrator:
         updates = drive(calibrator, scene, mirror=True, until="mirrored")
         assert [u.kind for u in updates] == ["mirrored"]
         assert calibrator.mirror is True
-        assert len(calibrator.collector) < config.min_samples
+        assert len(calibrator.collector) >= config.min_samples
+
+    def test_flips_a_mirrored_camera_without_walking_around(self, tmp_path):
+        scene = make_scene(seconds=40.0, noise_px=3.0, motion="in_place", seed=6)
+        dump = tmp_path / "samples.npz"
+        calibrator = AutoCalibrator(
+            CONFIG, WIDTH, HEIGHT, history_for(scene), background=False, samples_path=dump
+        )
+        updates = drive(calibrator, scene, mirror=True, until="calibrated")
+        assert [u.kind for u in updates] == ["mirrored", "calibrated"]
+        assert dump.exists()
+        result = calibrator.current
+        assert result.mirror is True
+        assert np.linalg.norm(result.camera_position - CAMERA_POSITION) < 0.15
 
     def test_keeps_a_calibration_that_still_fits(self, clean_scene):
         calibrator = AutoCalibrator(
@@ -359,6 +407,16 @@ class TestAutoCalibrator:
 
 
 class TestPersistence:
+    def test_samples_roundtrip(self, clean_scene, tmp_path):
+        samples = collect(clean_scene).snapshot()
+        path = tmp_path / "samples.npz"
+        samples.save(path, width=WIDTH, height=HEIGHT, mirror=True)
+        loaded, width, height, mirror = SampleSet.load(path)
+        assert (width, height, mirror) == (WIDTH, HEIGHT, True)
+        assert np.array_equal(loaded.anchor, samples.anchor)
+        assert np.allclose(loaded.position, samples.position)
+        assert np.allclose(loaded.mirror_pixel, samples.mirror_pixel, equal_nan=True)
+
     def test_roundtrip(self, clean_scene, tmp_path):
         original = solve(collect(clean_scene))
         original.mirror = True

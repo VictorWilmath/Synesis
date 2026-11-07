@@ -30,7 +30,8 @@ from ..skeleton import HEAD, LEFT_WRIST, RIGHT_WRIST, ROOT
 from ..types import Keypoints2D, Skeleton3D, VRState
 from .base import LiftContext
 from .geometric import GeometricLifter
-from .kinematics import enforce_bone_lengths, lift_by_bone_lengths
+from .kinematics import backproject_rays, enforce_bone_lengths, lift_by_bone_lengths
+from .refine import RefineWeights, refine_depths
 
 log = logging.getLogger(__name__)
 
@@ -66,12 +67,16 @@ class AnchoredLifter:
         *,
         offsets: dict[str, np.ndarray] | None = None,
         max_head_residual_m: float = 0.35,
+        refine: bool = True,
+        refine_weights: RefineWeights | None = None,
     ) -> None:
         self.min_score = min_score
         self.offsets = offsets
         # Beyond this the pose model is almost certainly not looking at the
         # headset wearer, and anchoring to it would drag the skeleton away.
         self.max_head_residual_m = max_head_residual_m
+        self.refine = refine
+        self.refine_weights = refine_weights
 
         self._previous_depths: np.ndarray | None = None
         self.head_residual_m: float | None = None
@@ -105,7 +110,10 @@ class AnchoredLifter:
             self.anchored = False
             return None
 
-        camera_xyz = enforce_bone_lengths(camera_xyz, context.bone_lengths)
+        if self.refine and self.anchored:
+            camera_xyz = self._refine(camera_xyz, keypoints, context, anchors)
+        else:
+            camera_xyz = enforce_bone_lengths(camera_xyz, context.bone_lengths)
         self._previous_depths = camera_xyz[:, 2].copy()
 
         if context.calibrated:
@@ -151,6 +159,43 @@ class AnchoredLifter:
             return None
         return np.asarray(context.rotation_cw, dtype=np.float64) @ (forward_play / norm)
 
+    def _refine(
+        self,
+        camera_xyz: np.ndarray,
+        keypoints: Keypoints2D,
+        context: LiftContext,
+        anchors: dict[int, np.ndarray],
+    ) -> np.ndarray:
+        rays = backproject_rays(np.asarray(keypoints.xy, dtype=np.float64), context.intrinsics)
+        anchor_camera = {
+            joint: float(
+                camera_from_play(point.reshape(1, 3), context.rotation_cw, context.translation_cw)[
+                    0, 2
+                ]
+            )
+            for joint, point in anchors.items()
+            if joint == HEAD or keypoints.scores[joint] >= self.min_score
+        }
+        depths = camera_xyz[:, 2]
+        previous = self._previous_depths
+        if previous is not None:
+            # Follow the head, so moving toward the camera is not resisted.
+            previous = previous + (depths[HEAD] - previous[HEAD])
+        rotation = np.asarray(context.rotation_cw, dtype=np.float64)
+        camera_height = float((-rotation.T @ np.asarray(context.translation_cw).reshape(3))[1])
+        refined = refine_depths(
+            rays,
+            depths,
+            context.bone_lengths,
+            up_camera=context.up_in_camera(),
+            camera_height_m=camera_height,
+            height_m=context.height_m,
+            anchor_depths=anchor_camera,
+            previous=previous,
+            weights=self.refine_weights,
+        )
+        return rays * refined[:, None]
+
     def _usable_anchors(self, context: LiftContext) -> dict[int, np.ndarray]:
         if context.vr is None or not context.calibrated:
             return {}
@@ -187,8 +232,9 @@ class AnchoredLifter:
     def _measure_residuals(self, play_xyz: np.ndarray, anchors: dict[int, np.ndarray]) -> None:
         """Compare the solved joints against the devices that were not pinned.
 
-        The wrists are never pinned, so their residual is a genuine held-out
-        check on the whole chain: intrinsics, extrinsics, keypoints and bone
+        The wrists are not pinned, only drawn toward the controllers' depth,
+        and never off their camera rays, so their residual is still a check
+        on the whole chain: intrinsics, extrinsics, keypoints and bone
         lengths all have to be right for it to be small.
         """
         head_play = anchors.get(HEAD)

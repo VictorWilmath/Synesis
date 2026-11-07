@@ -52,8 +52,6 @@ _OFFSET_PRIOR_SIGMA_M = 0.05
 _OFFSET_BOUND_M = 0.15
 _PRIOR_SCALE_PX = 4.0
 _NOMINAL_OFFSETS = np.stack([a.local_offset for a in ANCHORS]).astype(np.float64)
-# A mirrored hypothesis has to fit this much better before the image is flipped.
-_MIRROR_ADVANTAGE = 0.6
 
 
 def focal_from_fov(width: int, fov_deg: float) -> float:
@@ -186,6 +184,37 @@ class SampleSet:
             rotation=self.rotation[keep],
         )
 
+    def save(self, path: Path | str, *, width: int, height: int, mirror: bool) -> None:
+        """Write the samples a solve used, so a failed calibration can be replayed."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            path,
+            lags=self.lags,
+            anchor=self.anchor,
+            pixel=self.pixel,
+            mirror_pixel=self.mirror_pixel,
+            position=self.position,
+            rotation=self.rotation,
+            size=np.array([width, height]),
+            mirror=np.array(mirror),
+        )
+
+    @classmethod
+    def load(cls, path: Path | str) -> tuple[SampleSet, int, int, bool]:
+        """Samples written by `save`, with the image size and mirror setting."""
+        with np.load(path) as data:
+            samples = cls(
+                lags=data["lags"],
+                anchor=data["anchor"],
+                pixel=data["pixel"],
+                mirror_pixel=data["mirror_pixel"],
+                position=data["position"],
+                rotation=data["rotation"],
+            )
+            width, height = (int(v) for v in data["size"])
+            return samples, width, height, bool(data["mirror"])
+
 
 def _constellation(state: VRState) -> np.ndarray:
     out = np.full((len(ANCHORS), 3), np.nan)
@@ -293,6 +322,26 @@ class SampleCollector:
             self._frame_ids.append(frame)
             self._evict()
         return added
+
+    def flip(self, width: int) -> None:
+        """Re-express the stored samples as if the image had been mirrored.
+
+        Each device's pixel becomes the flipped pixel of its mirror keypoint,
+        so samples gathered before the webcam setting was corrected still count.
+        """
+
+        def flipped(pixel: np.ndarray) -> np.ndarray:
+            out = pixel.copy()
+            out[0] = (width - 1) - out[0]
+            return out
+
+        keep = [i for i, mirror in enumerate(self._mirror) if np.isfinite(mirror[0])]
+        pixel = [flipped(self._mirror[i]) for i in keep]
+        mirror = [flipped(self._pixel[i]) for i in keep]
+        self._pixel, self._mirror = pixel, mirror
+        for name in ("_anchor", "_position", "_rotation", "_frame"):
+            rows = getattr(self, name)
+            setattr(self, name, [rows[i] for i in keep])
 
     def _evict(self) -> None:
         while len(self._anchor) > self.max_samples and self._frame_ids:
@@ -538,20 +587,49 @@ def solve_camera(
 def assess(calibration: CameraCalibration, config: CalibrationConfig) -> str | None:
     """Why a solve is not yet good enough to track with, or None if it is."""
     if calibration.inlier_ratio < config.min_inlier_ratio:
-        return f"only {calibration.inlier_ratio:.0%} of samples agree; keep moving in view"
+        return (
+            f"only {calibration.inlier_ratio:.0%} of samples agree; "
+            "keep your head and both hands in view"
+        )
     if calibration.rms_px > config.max_rms_px:
-        return f"fit error {calibration.rms_px:.1f} px; keep moving in view"
+        return f"fit error {calibration.rms_px:.1f} px; keep your head and both hands in view"
     if calibration.position_std_m > config.max_position_std_m:
         return (
             f"camera position still +-{calibration.position_std_m * 100:.0f} cm; "
-            "walk side to side and toward the camera"
+            "reach high, low, out to the sides and toward the camera, and crouch"
         )
     if calibration.focal_std > config.max_focal_std:
-        return f"lens still +-{calibration.focal_std:.0%}; step toward and away from the camera"
+        return (
+            f"lens still +-{calibration.focal_std:.0%}; "
+            "reach toward the camera and back, and turn side on"
+        )
     return None
 
 
 # -- the background calibrator ---------------------------------------------
+
+
+def _mirror_fits_better(
+    normal: CameraCalibration | None,
+    mirrored: CameraCalibration | None,
+    config: CalibrationConfig,
+) -> bool:
+    """Whether the samples are explained by a mirrored image rather than the image as it is.
+
+    This decides between two hypotheses, so it asks only which one fits. How
+    precisely the camera is known yet is a separate question, for `assess`.
+    """
+    if mirrored is None:
+        return False
+    if mirrored.inlier_ratio < config.min_inlier_ratio or mirrored.rms_px > config.max_rms_px:
+        return False
+    return normal is None or mirrored.inlier_ratio > normal.inlier_ratio + 0.2
+
+
+def _describe_fit(calibration: CameraCalibration | None) -> str:
+    if calibration is None:
+        return "no fit"
+    return f"{calibration.inlier_ratio:.0%} of samples fit ({calibration.rms_px:.1f} px)"
 
 
 @dataclass(slots=True)
@@ -579,6 +657,7 @@ class AutoCalibrator:
         current: CameraCalibration | None = None,
         mirror: bool = False,
         background: bool = True,
+        samples_path: Path | str | None = None,
     ) -> None:
         self.config = config
         self.width = width
@@ -586,6 +665,7 @@ class AutoCalibrator:
         self.history = history
         self.min_score = min_score
         self.background = background
+        self.samples_path = samples_path
         self.lags = np.arange(0.0, config.max_latency_s + 1e-9, config.latency_step_s)
         self.collector = SampleCollector(
             self.lags,
@@ -684,6 +764,17 @@ class AutoCalibrator:
         self._failed_solves = 0
         self._generation += 1
 
+    def _flip(self) -> None:
+        self.mirror = not self.mirror
+        self.collector.flip(self.width)
+        self.last_attempt = None
+        self.last_reason = ""
+        self._samples_at_last_solve = 0
+        self._mirror_checked_at = len(self.collector)
+        self._failed_solves = 0
+        self._last_solve = -math.inf
+        self._generation += 1
+
     def _busy(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
@@ -705,14 +796,20 @@ class AutoCalibrator:
         check_mirror = (
             self.current is None
             and self._failed_solves > 0
-            and count >= 2 * self.config.min_samples
             and count >= self._mirror_checked_at + self.config.min_samples
         )
         hint = self.current.latency_s if self.current is not None else None
         generation = self._generation
+        dump = self.samples_path if self.current is None else None
+        mirror = self.mirror
 
         def job() -> None:
             result = self._solve(samples, hint, check_mirror)
+            if dump is not None:
+                try:
+                    samples.save(dump, width=self.width, height=self.height, mirror=mirror)
+                except OSError:
+                    log.debug("could not write calibration samples to %s", dump, exc_info=True)
             with self._lock:
                 self._finished = (generation, *result)
 
@@ -755,19 +852,19 @@ class AutoCalibrator:
     ) -> CalibrationUpdate | None:
         if checked_mirror:
             self._mirror_checked_at = len(self.collector)
-        if (
-            mirrored is not None
-            and assess(mirrored, self.config) is None
-            and (normal is None or mirrored.rms_px < _MIRROR_ADVANTAGE * normal.rms_px)
-        ):
+            log.info(
+                "mirror check: %s as the image is, %s flipped",
+                _describe_fit(normal),
+                _describe_fit(mirrored),
+            )
+        if _mirror_fits_better(normal, mirrored, self.config):
             log.warning(
                 "the webcam image is mirrored relative to its setting; flipping it "
-                "(%.1f px mirrored vs %s unmirrored)",
-                mirrored.rms_px,
-                f"{normal.rms_px:.1f} px" if normal is not None else "no fit",
+                "(%.0f%% of samples fit flipped, %s as it was)",
+                mirrored.inlier_ratio * 100,
+                f"{normal.inlier_ratio:.0%}" if normal is not None else "none",
             )
-            self.mirror = not self.mirror
-            self._reset()
+            self._flip()
             return CalibrationUpdate("mirrored")
 
         if normal is None:
@@ -803,7 +900,7 @@ class AutoCalibrator:
         if count < self.config.min_samples:
             lines = [
                 f"calibrating {count}/{self.config.min_samples}: "
-                "move around in view with the headset on"
+                "stay in view and reach around with both controllers"
             ]
         else:
             lines = ["calibrating: solving"]

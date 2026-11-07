@@ -40,7 +40,11 @@ def _default_lifter(config: Config):
             else ["CUDAExecutionProvider", "CPUExecutionProvider"]
         )
         return NeuralLifter(config.lift.model_path, window=config.lift.window, providers=providers)
-    return AnchoredLifter(min_score=config.pose2d.min_keypoint_score)
+    return AnchoredLifter(
+        min_score=config.pose2d.min_keypoint_score,
+        max_head_residual_m=config.lift.max_head_residual_m,
+        refine=config.lift.refine,
+    )
 
 
 class Pipeline:

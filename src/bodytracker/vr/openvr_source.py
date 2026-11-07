@@ -24,6 +24,9 @@ from ..types import DevicePose, VRState
 
 log = logging.getLogger(__name__)
 
+# The room setup only changes when the user recentres or redoes it.
+_ROOM_REFRESH_S = 1.0
+
 
 def _matrix_to_numpy(matrix) -> np.ndarray:
     """Convert an ``HmdMatrix34_t`` to a (3, 4) array."""
@@ -40,6 +43,10 @@ class OpenVRSource:
         self._openvr = None
         self._system = None
         self._device_count = 0
+        # SteamVR's raw tracking space in standing space, as a (3, 4) matrix:
+        # what a driver reporting raw poses, such as VMT, needs to be told.
+        self.standing_from_raw: np.ndarray | None = None
+        self._room_read_at = -float("inf")
 
     def open(self) -> None:
         import openvr
@@ -99,6 +106,15 @@ class OpenVRSource:
             self.prediction_seconds,
             self._device_count,
         )
+
+        if timestamp - self._room_read_at >= _ROOM_REFRESH_S:
+            self._room_read_at = timestamp
+            try:
+                self.standing_from_raw = _matrix_to_numpy(
+                    self._system.getRawZeroPoseToStandingAbsoluteTrackingPose()
+                )
+            except Exception:
+                log.debug("could not read the room setup", exc_info=True)
 
         left_index, right_index = self._hand_indices()
         return VRState(

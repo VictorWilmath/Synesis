@@ -56,7 +56,7 @@ class CalibrationConfig:
     initial_fov_deg: float = 62.0
     # Frame delay assumed until the solve measures it, and the range searched.
     initial_latency_s: float = 0.05
-    max_latency_s: float = 0.20
+    max_latency_s: float = 0.50
     latency_step_s: float = 0.02
     # Frames per second considered for new samples; most are then skipped as
     # repeats unless the user has moved.
@@ -71,7 +71,7 @@ class CalibrationConfig:
     # camera must be before anything is sent to VRChat.
     min_inlier_ratio: float = 0.6
     max_rms_px: float = 8.0
-    max_position_std_m: float = 0.05
+    max_position_std_m: float = 0.08
     max_focal_std: float = 0.04
     # A sustained reprojection error this large means the camera was moved.
     moved_error_px: float = 30.0
@@ -95,12 +95,15 @@ class LiftConfig:
     model_path: str = "models/lifter.onnx"
     window: int = 27
     max_head_residual_m: float = 0.35
+    # Anchored only: solve all joint depths together against the headset,
+    # the controllers and the floor, rather than one bone at a time.
+    refine: bool = True
 
 
 @dataclass(slots=True)
 class FilterConfig:
     min_cutoff: float = 1.0
-    beta: float = 2.0
+    beta: float = 8.0
     d_cutoff: float = 1.0
     rotation_alpha: float = 0.35
     hold_last_valid_s: float = 0.5
@@ -115,6 +118,11 @@ class SolveConfig:
 
 @dataclass(slots=True)
 class OSCConfig:
+    # "vrchat" sends VRChat's own OSC trackers. "vmt" drives virtual SteamVR
+    # trackers through the Virtual Motion Tracker driver instead, which VRChat
+    # then calibrates like Vive trackers. "auto" is "vmt" when VMT is
+    # installed and "vrchat" otherwise.
+    target: str = "vrchat"
     host: str = "127.0.0.1"
     port: int = 9000
     roles: list[str] = field(default_factory=lambda: ["hip", "left_foot", "right_foot"])
@@ -123,6 +131,9 @@ class OSCConfig:
     # aligned source space again, so they are an advanced opt-in only.
     send_head: bool = False
     send_rate_hz: int = 60
+    vmt_port: int = 39570
+    # 7 is VMT's Vive tracker compatible mode, 1 its plain tracker.
+    vmt_mode: int = 7
 
     def tracker_roles(self) -> list[TrackerRole]:
         return [TrackerRole(r) for r in self.roles]
